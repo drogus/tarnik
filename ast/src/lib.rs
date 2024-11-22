@@ -3,6 +3,21 @@ use std::fmt::{self, write};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Nullable {
+    True,
+    False,
+}
+
+impl fmt::Display for Nullable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Nullable::True => write!(f, "null"),
+            Nullable::False => write!(f, ""),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WasmType {
     I32,
     I64,
@@ -10,8 +25,8 @@ pub enum WasmType {
     F64,
     I31Ref,
     Anyref,
-    Ref(String),
-    Array(Box<WasmType>),
+    Ref(String, Nullable),
+    Array { mutable: bool, ty: Box<WasmType> },
     Struct(Vec<WasmType>),
 }
 
@@ -24,8 +39,11 @@ impl fmt::Display for WasmType {
             WasmType::F64 => write!(f, "f64"),
             WasmType::Anyref => write!(f, "anyref"),
             WasmType::I31Ref => write!(f, "i31ref"),
-            WasmType::Ref(name) => write!(f, "(ref {})", name),
-            WasmType::Array(t) => write!(f, "(array {})", t),
+            WasmType::Ref(name, nullable) => write!(f, "(ref {nullable} {name})"),
+            WasmType::Array { mutable, ty } => {
+                let m = if *mutable { "mut" } else { "" };
+                write!(f, "(array {m} {ty})")
+            }
             WasmType::Struct(types) => {
                 write!(f, "(struct")?;
                 for t in types {
@@ -52,7 +70,7 @@ impl FromStr for WasmType {
             "anyref" => Self::Anyref,
             _ => {
                 // for now just handle custom types
-                Self::Ref(s.into())
+                Self::Ref(s.into(), Nullable::False)
             }
         };
 
@@ -463,7 +481,7 @@ impl fmt::Display for WatFunction {
 
 #[derive(Debug, Clone, Default)]
 pub struct WatModule {
-    pub types: HashMap<String, Vec<WasmType>>,
+    pub types: HashMap<String, WasmType>,
     pub imports: Vec<(String, String, WasmType)>,
     pub functions: Vec<WatFunction>,
     pub exports: Vec<(String, String)>,
@@ -488,17 +506,17 @@ impl WatModule {
     pub fn get_function_mut(&mut self, name: &str) -> Option<&mut WatFunction> {
         self.functions.iter_mut().find(|f| f.name == name)
     }
+
+    pub fn add_type(&mut self, name: impl Into<String>, ty: WasmType) {
+        self.types.insert(name.into(), ty);
+    }
 }
 
 impl fmt::Display for WatModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Types
-        for (name, params) in &self.types {
-            write!(f, "  (type ${} (func", name)?;
-            for param in params {
-                write!(f, " {}", param)?;
-            }
-            writeln!(f, "))")?;
+        for (name, ty) in &self.types {
+            writeln!(f, "  (type {name} {ty})")?;
         }
 
         // Imports
