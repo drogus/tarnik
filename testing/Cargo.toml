@@ -1,0 +1,9 @@
+[package]
+name = "wazap-testing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wazap-generator = { path = "../generator" }
+wazap-ast = { path = "../ast" }

@@ -1,0 +1,24 @@
+[package]
+name = "wazap-generator"
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE"
+description = "Macro for generating WASM AST"
+documentation = ""
+homepage = ""
+repository = ""
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+convert_case = "0.6"
+wazap-ast = { path = "../ast" }
+regex = "1"
+
+[lib]
+proc-macro = true
+
+[features]
