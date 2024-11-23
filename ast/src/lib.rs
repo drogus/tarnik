@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::{self, write};
 use std::str::FromStr;
 
+use indexmap::IndexMap;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Nullable {
     True,
@@ -70,7 +72,7 @@ impl FromStr for WasmType {
             "anyref" => Self::Anyref,
             _ => {
                 // for now just handle custom types
-                Self::Ref(s.into(), Nullable::False)
+                Self::Ref(format!("${s}"), Nullable::False)
             }
         };
 
@@ -99,8 +101,11 @@ pub enum WatInstruction {
     I64Eqz,
     F32Eqz,
     F64Eqz,
+    I32GeS,
     StructNew(String),
     ArrayNew(String),
+    ArrayLen,
+    ArrayGet(String),
     RefNull(WasmType),
     Ref(String),
     RefFunc(String),
@@ -109,11 +114,11 @@ pub enum WatInstruction {
     ReturnCall(String),
     Block {
         label: String,
-        instructions: Vec<Box<WatInstruction>>,
+        instructions: Vec<WatInstruction>,
     },
     Loop {
         label: String,
-        instructions: Vec<Box<WatInstruction>>,
+        instructions: Vec<WatInstruction>,
     },
     If {
         condition: Option<Box<WatInstruction>>,
@@ -150,28 +155,28 @@ impl WatInstruction {
         })
     }
 
-    pub fn global_get(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::GlobalGet(name.into()))
+    pub fn global_get(name: impl Into<String>) -> Self {
+        Self::GlobalGet(name.into())
     }
 
-    pub fn local_get(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::LocalGet(name.into()))
+    pub fn local_get(name: impl Into<String>) -> Self {
+        Self::LocalGet(name.into())
     }
 
-    pub fn local_set(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::LocalSet(name.into()))
+    pub fn local_set(name: impl Into<String>) -> Self {
+        Self::LocalSet(name.into())
     }
 
-    pub fn local_tee(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::LocalTee(name.into()))
+    pub fn local_tee(name: impl Into<String>) -> Self {
+        Self::LocalTee(name.into())
     }
 
     pub fn call(name: impl Into<String>) -> Box<Self> {
         Box::new(Self::Call(name.into()))
     }
 
-    pub fn i32_const(value: i32) -> Box<Self> {
-        Box::new(Self::I32Const(value))
+    pub fn i32_const(value: i32) -> Self {
+        Self::I32Const(value)
     }
 
     pub fn f64_const(value: f64) -> Box<Self> {
@@ -188,6 +193,10 @@ impl WatInstruction {
         length: Box<WatInstruction>,
     ) -> Box<Self> {
         Box::new(Self::ArrayNew(name.into()))
+    }
+
+    pub fn array_get(name: impl Into<String>) -> Self {
+        Self::ArrayGet(name.into())
     }
 
     pub fn ref_null(r#type: WasmType) -> Box<Self> {
@@ -210,18 +219,18 @@ impl WatInstruction {
         Box::new(Self::ReturnCall(name.into()))
     }
 
-    pub fn block(label: impl Into<String>, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Block {
+    pub fn block(label: impl Into<String>, instructions: Vec<WatInstruction>) -> Self {
+        Self::Block {
             label: label.into(),
             instructions,
-        })
+        }
     }
 
-    pub fn r#loop(label: String, instructions: Vec<Box<WatInstruction>>) -> Box<Self> {
-        Box::new(Self::Loop {
-            label,
+    pub fn r#loop(label: impl Into<String>, instructions: Vec<WatInstruction>) -> Self {
+        Self::Loop {
+            label: label.into(),
             instructions,
-        })
+        }
     }
 
     pub fn r#if(
@@ -236,12 +245,12 @@ impl WatInstruction {
         })
     }
 
-    pub fn br_if(label: impl Into<String>) -> Box<Self> {
-        Box::new(Self::BrIf(label.into()))
+    pub fn br_if(label: impl Into<String>) -> Self {
+        Self::BrIf(label.into())
     }
 
-    pub fn br(label: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Br(label.into()))
+    pub fn br(label: impl Into<String>) -> Self {
+        Self::Br(label.into())
     }
 
     pub fn empty() -> Box<Self> {
@@ -313,10 +322,14 @@ impl fmt::Display for WatInstruction {
             WatInstruction::F32Const(value) => write!(f, "(f32.const {})", value),
             WatInstruction::F64Const(value) => write!(f, "(f64.const {})", value),
 
+            WatInstruction::I32GeS => writeln!(f, "(i32.ge_s)"),
+
             WatInstruction::StructNew(name) => write!(f, "(struct.new {})", name),
             WatInstruction::ArrayNew(name) => {
                 write!(f, "(array.new {name})")
             }
+            WatInstruction::ArrayLen => write!(f, "(array.len)"),
+            WatInstruction::ArrayGet(ty) => write!(f, "(array.get {ty})"),
             WatInstruction::RefNull(r#type) => write!(f, "(ref.null {})", r#type),
             WatInstruction::RefFunc(name) => write!(f, "(ref.func ${})", name),
             WatInstruction::Return => write!(f, "return"),
@@ -481,7 +494,7 @@ impl fmt::Display for WatFunction {
 
 #[derive(Debug, Clone, Default)]
 pub struct WatModule {
-    pub types: HashMap<String, WasmType>,
+    pub types: IndexMap<String, WasmType>,
     pub imports: Vec<(String, String, WasmType)>,
     pub functions: Vec<WatFunction>,
     pub exports: Vec<(String, String)>,
@@ -491,7 +504,7 @@ pub struct WatModule {
 impl WatModule {
     pub fn new() -> Self {
         WatModule {
-            types: HashMap::new(),
+            types: IndexMap::new(),
             imports: Vec::new(),
             functions: Vec::new(),
             exports: Vec::new(),

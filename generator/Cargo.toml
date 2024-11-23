@@ -17,6 +17,8 @@ syn = { version = "2.0", features = ["full", "extra-traits"] }
 convert_case = "0.6"
 wazap-ast = { path = "../ast" }
 regex = "1"
+indexmap.workspace = true
+anyhow = "1"
 
 [lib]
 proc-macro = true
