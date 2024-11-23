@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use proc_macro::TokenStream;
 use std::collections::HashMap;
@@ -6,7 +6,7 @@ use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     token::{self, Semi},
-    Expr, ExprBinary, ExprForLoop, Pat, PatType, Type,
+    Expr, ExprBinary, ExprForLoop, Pat, PatPath, PatType, Type,
 };
 
 extern crate proc_macro;
@@ -173,6 +173,7 @@ fn parse_function(input: &mut ParseStream, functions: &mut Vec<Function>) -> Res
     braced!(content in input);
     let body: Vec<Stmt> = content.call(syn::Block::parse_within)?;
 
+    println!("BODY: {body:#?}");
     functions.push(Function {
         name: name.to_string(),
         parameters,
@@ -314,6 +315,9 @@ fn get_type(function: &WatFunction, instructions: &Vec<WatInstruction>) -> Optio
             WatInstruction::I32GeS => &WasmType::I32,
             WatInstruction::ArrayLen => &WasmType::I32,
             WatInstruction::ArrayGet(_) => todo!("get_type: WatInstruction::ArrayGet"),
+            WatInstruction::ArrayNewFixed(typeidx, n) => {
+                todo!("get_type: WatInstruction::ArrayGet")
+            }
         })
         .cloned()
 }
@@ -364,7 +368,7 @@ fn translate_for_loop(
     for_loop_expr: &ExprForLoop,
 ) {
     let var_name = format!("${}", extract_name_from_pattern(&*for_loop_expr.pat));
-    translate_expression(module, function, block, &for_loop_expr.expr, &None);
+    translate_expression(module, function, block, &for_loop_expr.expr, &None, &None);
     let ty = get_type(function, block).unwrap();
     let for_target_local = function.add_local("$for_target", ty.clone());
     let length_local = function.add_local("$length", WasmType::I32);
@@ -423,46 +427,125 @@ fn translate_for_loop(
     //wat_function.body = instructions.into_iter().map(|i| Box::new(i)).collect();
 }
 
+fn translate_lit(
+    mut module: &mut WatModule,
+    mut function: &mut WatFunction,
+    mut current_block: &mut Vec<WatInstruction>,
+    lit: &syn::Lit,
+    ty: &WasmType,
+) {
+    let instr = match lit {
+        syn::Lit::Str(_) => todo!("translate_lit: syn::Lit::Str(_) "),
+        syn::Lit::ByteStr(_) => todo!("translate_lit: syn::Lit::ByteStr(_) "),
+        syn::Lit::CStr(_) => todo!("translate_lit: syn::Lit::CStr(_) "),
+        syn::Lit::Byte(_) => todo!("translate_lit: syn::Lit::Byte(_) "),
+        syn::Lit::Char(_) => todo!("translate_lit: syn::Lit::Char(_) "),
+        syn::Lit::Int(lit_int) => match ty {
+            WasmType::I32 => WatInstruction::I32Const(lit_int.base10_parse().unwrap()),
+            WasmType::I64 => WatInstruction::I64Const(lit_int.base10_parse().unwrap()),
+            WasmType::F32 => WatInstruction::F32Const(lit_int.base10_parse().unwrap()),
+            WasmType::F64 => WatInstruction::F64Const(lit_int.base10_parse().unwrap()),
+            WasmType::I31Ref => todo!("i31ref literal"),
+            t => todo!("translate int lteral: {t:?}"),
+        },
+        syn::Lit::Float(_) => todo!("translate_lit: syn::Lit::Float(_) "),
+        syn::Lit::Bool(_) => todo!("translate_lit: syn::Lit::Bool(_) "),
+        syn::Lit::Verbatim(_) => todo!("translate_lit: syn::Lit::Verbatim(_) "),
+        _ => todo!("translate_lit: _ "),
+    };
+    current_block.push(instr);
+}
+
+// TODO: the passing of all of those details is getting ridiculous. I would like to rewrite
+// these functions to work on a struct that keeps all the details within a struct, so that
+// I don't have to pass everything to each subsequent function call
 fn translate_expression(
     mut module: &mut WatModule,
     mut function: &mut WatFunction,
     mut current_block: &mut Vec<WatInstruction>,
     expr: &Expr,
     _: &Option<Semi>,
+    ty: &Option<WasmType>,
 ) {
     match expr {
-        Expr::Array(_) => todo!("translate_expression: Expr::Array(_) "),
+        Expr::Array(expr_array) => {
+            // apparently array.new_fixed can fail if the array is over 10k elements
+            // https://github.com/dart-lang/sdk/issues/55873
+            // not a huge concern for now, but it might be nice to do a check and change
+            // strategy based on the elements size
+            let length = expr_array.elems.len();
+            for elem in &expr_array.elems {
+                translate_expression(module, function, current_block, elem, &None, ty);
+            }
+            if let Some(WasmType::Ref(typeidx, _)) = ty {
+                current_block.push(WatInstruction::ArrayNewFixed(
+                    typeidx.to_string(),
+                    length as u16,
+                ));
+            } else {
+                panic!("Could not get the type for array literal, type we got: {ty:?}");
+            }
+        }
         Expr::Assign(_) => todo!("translate_expression: Expr::Assign(_) "),
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
-            translate_expression(module, function, current_block, &*binary.left, &None);
+            translate_expression(module, function, current_block, &*binary.left, &None, &None);
             let left_ty = get_type(function, current_block);
-            translate_expression(module, function, current_block, &*binary.right, &None);
+            translate_expression(
+                module,
+                function,
+                current_block,
+                &*binary.right,
+                &None,
+                &None,
+            );
             let right_ty = get_type(function, current_block);
 
             // TODO: handle casts and/or error handling
 
             println!("translate_binary: {binary:#?}\n{left_ty:#?}\n{right_ty:#?}");
-            translate_binary(&mut function, &mut current_block, binary, left_ty.unwrap());
+            translate_binary(function, current_block, binary, left_ty.unwrap());
         }
         Expr::Block(_) => todo!("translate_expression: Expr::Block(_) "),
         Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
-        Expr::Call(_) => todo!("translate_expression: Expr::Call(_) "),
+        Expr::Call(expr_call) => {
+            println!("expr_call: {expr_call:#?}");
+            if let Expr::Path(syn::ExprPath { path, .. }) = &*expr_call.func {
+                for arg in &expr_call.args {
+                    translate_expression(module, function, current_block, arg, &None, ty);
+                }
+
+                current_block.push(WatInstruction::call(format!("${}", path.segments[0].ident)));
+            } else {
+                panic!("Only calling functions by path is supported at the moment");
+            }
+        }
         Expr::Cast(_) => todo!("translate_expression: Expr::Cast(_) "),
         Expr::Closure(_) => todo!("translate_expression: Expr::Closure(_) "),
         Expr::Const(_) => todo!("translate_expression: Expr::Const(_) "),
         Expr::Continue(_) => todo!("translate_expression: Expr::Continue(_) "),
         Expr::Field(_) => todo!("translate_expression: Expr::Field(_) "),
         Expr::ForLoop(for_loop_expr) => {
-            translate_for_loop(module, function, current_block, &for_loop_expr)
+            translate_for_loop(module, function, current_block, for_loop_expr)
         }
         Expr::Group(_) => todo!("translate_expression: Expr::Group(_) "),
         Expr::If(_) => todo!("translate_expression: Expr::If(_) "),
         Expr::Index(_) => todo!("translate_expression: Expr::Index(_) "),
         Expr::Infer(_) => todo!("translate_expression: Expr::Infer(_) "),
         Expr::Let(_) => todo!("translate_expression: Expr::Let(_) "),
-        Expr::Lit(_) => todo!("translate_expression: Expr::Lit(_) "),
+        Expr::Lit(expr_lit) => {
+            let ty = if let Some(WasmType::Ref(name, _)) = ty.clone() {
+                get_element_type(module, function, &name)
+                    .map_err(|_| anyhow!("Type needs to be known for a literal"))
+                    .unwrap()
+            } else {
+                ty.clone()
+                    .ok_or(anyhow!("Type needs to be known for a literal"))
+                    .unwrap()
+            };
+            translate_lit(module, function, current_block, &expr_lit.lit, &ty)
+        }
         Expr::Loop(_) => todo!("translate_expression: Expr::Loop(_) "),
         Expr::Macro(_) => todo!("translate_expression: Expr::Macro(_) "),
         Expr::Match(_) => todo!("translate_expression: Expr::Match(_) "),
@@ -478,7 +561,7 @@ fn translate_expression(
         Expr::Repeat(_) => todo!("translate_expression: Expr::Repeat(_) "),
         Expr::Return(ret) => {
             if let Some(expr) = &ret.expr {
-                translate_expression(module, function, current_block, expr, &None)
+                translate_expression(module, function, current_block, expr, &None, &None)
             }
             current_block.push(WatInstruction::Return);
         }
@@ -662,6 +745,9 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::ArrayGet(name) => {
                 quote! { wazap_ast::WatInstruction::ArrayGet(#name.to_string()) }
             }
+            WatInstruction::ArrayNewFixed(typeidx, n) => {
+                quote! { wazap_ast::WatInstruction::ArrayNewFixed(#typeidx.to_string(), #n) }
+            }
         };
         tokens.extend(tokens_str);
     }
@@ -839,14 +925,28 @@ fn translate_statement(
                 let ty = ty
                     .ok_or(anyhow!("Coul not translate type in a local statement"))
                     .unwrap(); // type should be known at this point
-                function.add_local_exact(name, ty);
+                function.add_local_exact(&name, ty.clone());
+
+                if let Some(init) = &local.init {
+                    translate_expression(
+                        module,
+                        function,
+                        instructions,
+                        &init.expr,
+                        &Some(Semi::default()),
+                        &Some(ty),
+                    );
+                    instructions.push(WatInstruction::local_set(name));
+                }
             }
             syn::Pat::Verbatim(_) => todo!("Stmt::Local(local): syn::Pat::Verbatim(_) "),
             syn::Pat::Wild(_) => todo!("Stmt::Local(local): syn::Pat::Wild(_) "),
             _ => todo!("Stmt::Local(local): _ "),
         },
         Stmt::Item(_) => todo!("Stmt::Item(_) "),
-        Stmt::Expr(expr, semi) => translate_expression(module, function, instructions, expr, semi),
+        Stmt::Expr(expr, semi) => {
+            translate_expression(module, function, instructions, expr, semi, &None)
+        }
         Stmt::Macro(_) => todo!("Stmt::Macro(_) "),
     }
 }

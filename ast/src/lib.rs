@@ -104,6 +104,7 @@ pub enum WatInstruction {
     I32GeS,
     StructNew(String),
     ArrayNew(String),
+    ArrayNewFixed(String, u16),
     ArrayLen,
     ArrayGet(String),
     RefNull(WasmType),
@@ -171,8 +172,8 @@ impl WatInstruction {
         Self::LocalTee(name.into())
     }
 
-    pub fn call(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Call(name.into()))
+    pub fn call(name: impl Into<String>) -> Self {
+        Self::Call(name.into())
     }
 
     pub fn i32_const(value: i32) -> Self {
@@ -330,6 +331,9 @@ impl fmt::Display for WatInstruction {
             }
             WatInstruction::ArrayLen => write!(f, "(array.len)"),
             WatInstruction::ArrayGet(ty) => write!(f, "(array.get {ty})"),
+            WatInstruction::ArrayNewFixed(typeidx, n) => {
+                write!(f, "(array.new_fixed {typeidx} {n})")
+            }
             WatInstruction::RefNull(r#type) => write!(f, "(ref.null {})", r#type),
             WatInstruction::RefFunc(name) => write!(f, "(ref.func ${})", name),
             WatInstruction::Return => write!(f, "return"),
