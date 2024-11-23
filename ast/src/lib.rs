@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{self, write};
 use std::str::FromStr;
 
-use indexmap::IndexMap;
+pub use indexmap::IndexMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Nullable {
@@ -19,7 +19,26 @@ impl fmt::Display for Nullable {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: Option<String>,
+    pub ty: WasmType,
+    pub mutable: bool,
+}
+
+impl fmt::Display for StructField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = self.name.clone().unwrap_or_default();
+        let ty = if self.mutable {
+            format!("(mut {})", self.ty)
+        } else {
+            format!("{}", self.ty)
+        };
+        writeln!(f, "(field {name} {ty}")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum WasmType {
     I32,
     I64,
@@ -29,7 +48,7 @@ pub enum WasmType {
     Anyref,
     Ref(String, Nullable),
     Array { mutable: bool, ty: Box<WasmType> },
-    Struct(Vec<WasmType>),
+    Struct(Vec<StructField>),
 }
 
 impl fmt::Display for WasmType {
@@ -46,10 +65,10 @@ impl fmt::Display for WasmType {
                 let m = if *mutable { "mut" } else { "" };
                 write!(f, "(array {m} {ty})")
             }
-            WasmType::Struct(types) => {
+            WasmType::Struct(fields) => {
                 write!(f, "(struct")?;
-                for t in types {
-                    write!(f, " {}", t)?;
+                for field in fields {
+                    write!(f, "  {field}")?;
                 }
                 write!(f, ")")
             }
@@ -107,6 +126,7 @@ pub enum WatInstruction {
     ArrayNewFixed(String, u16),
     ArrayLen,
     ArrayGet(String),
+    ArraySet(String),
     RefNull(WasmType),
     Ref(String),
     RefFunc(String),
@@ -198,6 +218,10 @@ impl WatInstruction {
 
     pub fn array_get(name: impl Into<String>) -> Self {
         Self::ArrayGet(name.into())
+    }
+
+    pub fn array_set(name: impl Into<String>) -> Self {
+        Self::ArraySet(name.into())
     }
 
     pub fn ref_null(r#type: WasmType) -> Box<Self> {
@@ -331,6 +355,7 @@ impl fmt::Display for WatInstruction {
             }
             WatInstruction::ArrayLen => write!(f, "(array.len)"),
             WatInstruction::ArrayGet(ty) => write!(f, "(array.get {ty})"),
+            WatInstruction::ArraySet(ty) => write!(f, "(array.set {ty})"),
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 write!(f, "(array.new_fixed {typeidx} {n})")
             }
