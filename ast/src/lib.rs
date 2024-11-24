@@ -44,6 +44,7 @@ pub enum WasmType {
     I64,
     F32,
     F64,
+    I8,
     I31Ref,
     Anyref,
     Ref(String, Nullable),
@@ -58,6 +59,7 @@ impl fmt::Display for WasmType {
             WasmType::I64 => write!(f, "i64"),
             WasmType::F32 => write!(f, "f32"),
             WasmType::F64 => write!(f, "f64"),
+            WasmType::I8 => write!(f, "i8"),
             WasmType::Anyref => write!(f, "anyref"),
             WasmType::I31Ref => write!(f, "i31ref"),
             WasmType::Ref(name, nullable) => write!(f, "(ref {nullable} {name})"),
@@ -87,6 +89,7 @@ impl FromStr for WasmType {
             "i64" => Self::I64,
             "f32" => Self::F32,
             "f64" => Self::F64,
+            "i8" => Self::I8,
             "i31ref" => Self::I31Ref,
             "anyref" => Self::Anyref,
             _ => {
@@ -122,6 +125,8 @@ pub enum WatInstruction {
     F64Eqz,
     I32GeS,
     StructNew(String),
+    StructGet(String, String),
+    StructSet(String, String),
     ArrayNew(String),
     ArrayNewFixed(String, u16),
     ArrayLen,
@@ -142,9 +147,8 @@ pub enum WatInstruction {
         instructions: Vec<WatInstruction>,
     },
     If {
-        condition: Option<Box<WatInstruction>>,
-        then: Vec<Box<WatInstruction>>,
-        r#else: Option<Vec<Box<WatInstruction>>>,
+        then: Vec<WatInstruction>,
+        r#else: Option<Vec<WatInstruction>>,
     },
     BrIf(String),
     Br(String),
@@ -204,8 +208,16 @@ impl WatInstruction {
         Box::new(Self::F64Const(value))
     }
 
-    pub fn struct_new(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::StructNew(name.into()))
+    pub fn struct_new(name: impl Into<String>) -> Self {
+        Self::StructNew(name.into())
+    }
+
+    pub fn struct_get(name: impl Into<String>, field_name: impl Into<String>) -> Self {
+        Self::StructGet(name.into(), field_name.into())
+    }
+
+    pub fn struct_set(name: impl Into<String>, field_name: impl Into<String>) -> Self {
+        Self::StructSet(name.into(), field_name.into())
     }
 
     pub fn array_new(
@@ -258,16 +270,8 @@ impl WatInstruction {
         }
     }
 
-    pub fn r#if(
-        condition: Option<Box<WatInstruction>>,
-        then: Vec<Box<WatInstruction>>,
-        r#else: Option<Vec<Box<WatInstruction>>>,
-    ) -> Box<Self> {
-        Box::new(Self::If {
-            condition,
-            then,
-            r#else,
-        })
+    pub fn r#if(then: Vec<WatInstruction>, r#else: Option<Vec<WatInstruction>>) -> Self {
+        Self::If { then, r#else }
     }
 
     pub fn br_if(label: impl Into<String>) -> Self {
@@ -350,6 +354,8 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32GeS => writeln!(f, "(i32.ge_s)"),
 
             WatInstruction::StructNew(name) => write!(f, "(struct.new {})", name),
+            WatInstruction::StructGet(name, field) => write!(f, "(struct.get {name} {field})"),
+            WatInstruction::StructSet(name, field) => write!(f, "(struct.set {name} {field})"),
             WatInstruction::ArrayNew(name) => {
                 write!(f, "(array.new {name})")
             }
@@ -383,17 +389,8 @@ impl fmt::Display for WatInstruction {
                 }
                 write!(f, ")")
             }
-            WatInstruction::If {
-                condition,
-                then,
-                r#else,
-            } => {
-                let condition = if let Some(c) = condition {
-                    format!("{c}")
-                } else {
-                    "".to_string()
-                };
-                write!(f, "(if {} (then", condition)?;
+            WatInstruction::If { then, r#else } => {
+                write!(f, "(if (then")?;
                 for instruction in then {
                     write!(f, " {}", instruction)?;
                 }

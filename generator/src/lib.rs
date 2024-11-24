@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use proc_macro::TokenStream;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 use syn::{
     bracketed,
     parse::{Parse, ParseStream},
@@ -102,7 +102,7 @@ impl Parse for GlobalScope {
                 types.insert(name, ty);
             } else if input.peek(Token![struct]) {
                 let (name, ty) = parse_struct(&mut input)?;
-                types.insert(name, ty);
+                types.insert(format!("${name}"), ty);
             } else {
                 todo!("other input type")
             }
@@ -293,6 +293,7 @@ fn translate_binary(
                 WasmType::I64 => WatInstruction::I64Add,
                 WasmType::F32 => WatInstruction::F32Add,
                 WasmType::F64 => WatInstruction::F64Add,
+                WasmType::I8 => WatInstruction::I32Add,
                 WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
                 WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
@@ -368,6 +369,8 @@ fn get_type(
         WatInstruction::F64Eqz => WasmType::F64,
 
         WatInstruction::StructNew(_) => todo!("get_type: WatInstruction::StructNew(_) "),
+        WatInstruction::StructGet(_, _) => todo!("get_type: WatInstruction::StructGet(_) "),
+        WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
         WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
         WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
         WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
@@ -383,11 +386,7 @@ fn get_type(
             label,
             instructions,
         } => todo!("get_type: WatInstruction::Loop "),
-        WatInstruction::If {
-            condition,
-            then,
-            r#else,
-        } => todo!("get_type: WatInstruction::If "),
+        WatInstruction::If { then, r#else } => todo!("get_type: WatInstruction::If "),
         WatInstruction::BrIf(_) => todo!("get_type: WatInstruction::BrIf(_) "),
         WatInstruction::Br(_) => todo!("get_type: WatInstruction::Br(_) "),
         WatInstruction::Empty => todo!("get_type: WatInstruction::Empty "),
@@ -441,6 +440,22 @@ fn extract_name_from_pattern(pattern: &Pat) -> String {
     }
 }
 
+fn get_struct_type(
+    module: &WatModule,
+    function: &WatFunction,
+    name: &str,
+) -> anyhow::Result<String> {
+    let ty = function
+        .locals
+        .get(name)
+        .ok_or(anyhow!("Couldn't find a struct with name {name}"))?;
+
+    match ty {
+        WasmType::Ref(name, _) => Ok(name.clone()),
+        _ => anyhow::bail!("Tried to use type {name} as a struct type"),
+    }
+}
+
 fn get_array_type(
     module: &WatModule,
     function: &WatFunction,
@@ -454,6 +469,61 @@ fn get_array_type(
     match ty {
         WasmType::Ref(name, _) => Ok(name.clone()),
         _ => anyhow::bail!("Tried to use type {name} as an array type"),
+    }
+}
+
+// TODO: handle globals too
+fn get_local_type(
+    module: &WatModule,
+    function: &WatFunction,
+    name: &str,
+) -> anyhow::Result<WasmType> {
+    let ty = function
+        .locals
+        .get(name)
+        .ok_or(anyhow!("Could not find local {name}"))?;
+
+    Ok(ty.clone())
+}
+
+fn get_struct_field_type_by_name(
+    module: &WatModule,
+    function: &WatFunction,
+    instructions: &Vec<WatInstruction>,
+    type_name: &str,
+    field_name: &str,
+) -> anyhow::Result<WasmType> {
+    let ty = module
+        .types
+        .get(type_name)
+        .ok_or(anyhow!("Could not find type {type_name}"))?;
+
+    match ty {
+        WasmType::Struct(fields) => Ok(fields
+            .iter()
+            .find(|f| f.name.clone().unwrap() == field_name)
+            .unwrap()
+            .ty
+            .clone()),
+        _ => anyhow::bail!("Tried to use type {type_name} as a struct type"),
+    }
+}
+
+fn get_struct_field_type(
+    module: &WatModule,
+    function: &WatFunction,
+    instructions: &Vec<WatInstruction>,
+    type_name: &str,
+    field_index: usize,
+) -> anyhow::Result<WasmType> {
+    let ty = module
+        .types
+        .get(type_name)
+        .ok_or(anyhow!("Could not find type {type_name}"))?;
+
+    match ty {
+        WasmType::Struct(fields) => Ok(fields[field_index].ty.clone()),
+        _ => anyhow::bail!("Tried to use type {type_name} as a struct type"),
     }
 }
 
@@ -479,8 +549,8 @@ fn translate_for_loop(
     block: &mut Vec<WatInstruction>,
     for_loop_expr: &ExprForLoop,
 ) {
-    let var_name = format!("${}", extract_name_from_pattern(&*for_loop_expr.pat));
-    translate_expression(module, function, block, &for_loop_expr.expr, &None, &None);
+    let var_name = format!("${}", extract_name_from_pattern(for_loop_expr.pat.deref()));
+    translate_expression(module, function, block, &for_loop_expr.expr, None, None);
     let ty = get_type(module, function, block).unwrap();
     let for_target_local = function.add_local("$for_target", ty.clone());
     let length_local = function.add_local("$length", WasmType::I32);
@@ -489,12 +559,12 @@ fn translate_for_loop(
     block.push(WatInstruction::ArrayLen);
     block.push(WatInstruction::local_set(&length_local));
 
-    let mut instructions = Vec::new();
-
-    instructions.push(WatInstruction::local_get(&i_local));
-    instructions.push(WatInstruction::local_get(&length_local));
-    instructions.push(WatInstruction::I32GeS);
-    instructions.push(WatInstruction::br_if("$block-label"));
+    let mut instructions = vec![
+        WatInstruction::local_get(&i_local),
+        WatInstruction::local_get(&length_local),
+        WatInstruction::I32GeS,
+        WatInstruction::br_if("$block-label"),
+    ];
 
     let array_type;
     if let WasmType::Ref(name, _) = ty.clone() {
@@ -541,17 +611,25 @@ fn translate_lit(
     lit: &syn::Lit,
     ty: &WasmType,
 ) {
-    let instr = match lit {
-        syn::Lit::Str(_) => todo!("translate_lit: syn::Lit::Str(_) "),
+    let mut instr = match lit {
+        syn::Lit::Str(lit_str) => lit_str
+            .value()
+            .as_bytes()
+            .iter()
+            .map(|b| WatInstruction::I32Const(*b as i32))
+            .collect(),
         syn::Lit::ByteStr(_) => todo!("translate_lit: syn::Lit::ByteStr(_) "),
         syn::Lit::CStr(_) => todo!("translate_lit: syn::Lit::CStr(_) "),
         syn::Lit::Byte(_) => todo!("translate_lit: syn::Lit::Byte(_) "),
-        syn::Lit::Char(_) => todo!("translate_lit: syn::Lit::Char(_) "),
+        syn::Lit::Char(lit_char) => {
+            vec![WatInstruction::I32Const(lit_char.value() as i32)]
+        }
         syn::Lit::Int(lit_int) => match ty {
-            WasmType::I32 => WatInstruction::I32Const(lit_int.base10_parse().unwrap()),
-            WasmType::I64 => WatInstruction::I64Const(lit_int.base10_parse().unwrap()),
-            WasmType::F32 => WatInstruction::F32Const(lit_int.base10_parse().unwrap()),
-            WasmType::F64 => WatInstruction::F64Const(lit_int.base10_parse().unwrap()),
+            WasmType::I32 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
+            WasmType::I64 => vec![WatInstruction::I64Const(lit_int.base10_parse().unwrap())],
+            WasmType::F32 => vec![WatInstruction::F32Const(lit_int.base10_parse().unwrap())],
+            WasmType::F64 => vec![WatInstruction::F64Const(lit_int.base10_parse().unwrap())],
+            WasmType::I8 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
             WasmType::I31Ref => todo!("i31ref literal"),
             t => todo!("translate int lteral: {t:?}"),
         },
@@ -560,7 +638,7 @@ fn translate_lit(
         syn::Lit::Verbatim(_) => todo!("translate_lit: syn::Lit::Verbatim(_) "),
         _ => todo!("translate_lit: _ "),
     };
-    current_block.push(instr);
+    current_block.append(&mut instr);
 }
 
 // TODO: the passing of all of those details is getting ridiculous. I would like to rewrite
@@ -571,20 +649,30 @@ fn translate_expression(
     mut function: &mut WatFunction,
     mut current_block: &mut Vec<WatInstruction>,
     expr: &Expr,
-    _: &Option<Semi>,
-    ty: &Option<WasmType>,
+    _: Option<Semi>,
+    ty: Option<&WasmType>,
 ) {
     match expr {
         Expr::Array(expr_array) => {
-            // apparently array.new_fixed can fail if the array is over 10k elements
-            // https://github.com/dart-lang/sdk/issues/55873
-            // not a huge concern for now, but it might be nice to do a check and change
-            // strategy based on the elements size
-            let length = expr_array.elems.len();
-            for elem in &expr_array.elems {
-                translate_expression(module, function, current_block, elem, &None, ty);
-            }
             if let Some(WasmType::Ref(typeidx, _)) = ty {
+                // apparently array.new_fixed can fail if the array is over 10k elements
+                // https://github.com/dart-lang/sdk/issues/55873
+                // not a huge concern for now, but it might be nice to do a check and change
+                // strategy based on the elements size
+                let length = expr_array.elems.len();
+                let elem_type = get_element_type(module, function, typeidx)
+                    .map_err(|_| anyhow!("Type needs to be known for a literal"))
+                    .unwrap();
+                for elem in &expr_array.elems {
+                    translate_expression(
+                        module,
+                        function,
+                        current_block,
+                        elem,
+                        None,
+                        Some(&elem_type),
+                    );
+                }
                 current_block.push(WatInstruction::ArrayNewFixed(
                     typeidx.to_string(),
                     length as u16,
@@ -594,19 +682,18 @@ fn translate_expression(
             }
         }
         Expr::Assign(expr_assign) => {
-            println!("expr_assign: {expr_assign:#?}");
             match *expr_assign.left.clone() {
                 Expr::Index(expr_index) => {
-                    if let Expr::Path(syn::ExprPath { path, .. }) = &*expr_index.expr {
-                        let array_name = format!("${}", path.segments[0].ident.to_string());
+                    if let Expr::Path(syn::ExprPath { path, .. }) = expr_index.expr.deref() {
+                        let array_name = format!("${}", path.segments[0].ident);
                         current_block.push(WatInstruction::local_get(&array_name));
                         translate_expression(
                             module,
                             function,
                             current_block,
-                            &*expr_index.index,
-                            &None,
-                            &Some(WasmType::I32),
+                            expr_index.index.deref(),
+                            None,
+                            Some(&WasmType::I32),
                         );
                         let array_type = get_array_type(module, function, &array_name).unwrap();
                         let element_type = get_element_type(module, function, &array_type).unwrap();
@@ -614,32 +701,96 @@ fn translate_expression(
                             module,
                             function,
                             current_block,
-                            &*expr_assign.right,
-                            &None,
-                            &Some(element_type),
+                            expr_assign.right.deref(),
+                            None,
+                            Some(&element_type),
                         );
                         current_block.push(WatInstruction::array_set(array_type));
                     } else {
                         // TODO: this should be tied to the code line
-                        panic!("Only calling functions by path is supported at the moment");
+                        panic!("Accessing arrays is only possible by path at the moment");
                     }
                 }
-                Expr::Path(_) => todo!(),
+                Expr::Path(expr_path) => {
+                    let path = format!("${}", expr_path.path.segments[0].ident);
+                    let local_type = get_local_type(module, function, &path).unwrap();
+                    translate_expression(
+                        module,
+                        function,
+                        current_block,
+                        expr_assign.right.deref(),
+                        None,
+                        Some(&local_type),
+                    );
+                    current_block.push(WatInstruction::local_set(path));
+                }
+                Expr::Field(expr_field) => match &*expr_field.base {
+                    Expr::Path(expr_path) => {
+                        let ident = &expr_path.path.segments[0].ident;
+                        let name = format!("${ident}");
+                        let type_name = get_struct_type(module, function, &name).unwrap();
+                        let (field_name, field_type) = match &expr_field.member {
+                            syn::Member::Named(ident) => {
+                                let field_type = get_struct_field_type_by_name(
+                                    module,
+                                    function,
+                                    current_block,
+                                    &type_name,
+                                    &ident.to_string(),
+                                )
+                                .unwrap();
+                                let field_name = format!("${ident}");
+                                (field_name, field_type)
+                            }
+                            syn::Member::Unnamed(index) => {
+                                let field_type = get_struct_field_type(
+                                    module,
+                                    function,
+                                    current_block,
+                                    &type_name,
+                                    index.index as usize,
+                                )
+                                .unwrap();
+                                let field_name = format!("${ident}");
+                                (field_name, field_type)
+                            }
+                        };
+
+                        current_block.push(WatInstruction::local_get(&name));
+                        translate_expression(
+                            module,
+                            function,
+                            current_block,
+                            expr_assign.right.deref(),
+                            None,
+                            Some(&field_type),
+                        );
+                        current_block.push(WatInstruction::struct_set(&type_name, &field_name));
+                    }
+                    _ => panic!("Only path is possible to use with a field access"),
+                },
                 e => todo!("assign not implemented for {e:?}"),
             };
         }
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
-            translate_expression(module, function, current_block, &*binary.left, &None, &None);
+            translate_expression(
+                module,
+                function,
+                current_block,
+                binary.left.deref(),
+                None,
+                None,
+            );
             let left_ty = get_type(module, function, current_block);
             translate_expression(
                 module,
                 function,
                 current_block,
-                &*binary.right,
-                &None,
-                &None,
+                binary.right.deref(),
+                None,
+                None,
             );
             let right_ty = get_type(module, function, current_block);
 
@@ -650,9 +801,9 @@ fn translate_expression(
         Expr::Block(_) => todo!("translate_expression: Expr::Block(_) "),
         Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
         Expr::Call(expr_call) => {
-            if let Expr::Path(syn::ExprPath { path, .. }) = &*expr_call.func {
+            if let Expr::Path(syn::ExprPath { path, .. }) = expr_call.func.deref() {
                 for arg in &expr_call.args {
-                    translate_expression(module, function, current_block, arg, &None, ty);
+                    translate_expression(module, function, current_block, arg, None, ty);
                 }
 
                 current_block.push(WatInstruction::call(format!("${}", path.segments[0].ident)));
@@ -664,23 +815,67 @@ fn translate_expression(
         Expr::Closure(_) => todo!("translate_expression: Expr::Closure(_) "),
         Expr::Const(_) => todo!("translate_expression: Expr::Const(_) "),
         Expr::Continue(_) => todo!("translate_expression: Expr::Continue(_) "),
-        Expr::Field(_) => todo!("translate_expression: Expr::Field(_) "),
+        Expr::Field(expr_field) => match &*expr_field.base {
+            Expr::Path(expr_path) => {
+                let ident = &expr_path.path.segments[0].ident;
+                let name = format!("${ident}");
+                let type_name = get_struct_type(module, function, &name).unwrap();
+                let field_name = match &expr_field.member {
+                    syn::Member::Named(ident) => format!("${ident}"),
+                    syn::Member::Unnamed(index) => index.index.to_string(),
+                };
+
+                current_block.push(WatInstruction::local_get(&name));
+                current_block.push(WatInstruction::struct_get(&type_name, &field_name));
+            }
+            _ => panic!("Only path is possible to use with a field access"),
+        },
         Expr::ForLoop(for_loop_expr) => {
             translate_for_loop(module, function, current_block, for_loop_expr)
         }
         Expr::Group(_) => todo!("translate_expression: Expr::Group(_) "),
-        Expr::If(_) => todo!("translate_expression: Expr::If(_) "),
+        Expr::If(if_expr) => {
+            println!("if_expr.cond {:#?}", if_expr.cond);
+            translate_expression(
+                module,
+                function,
+                current_block,
+                if_expr.cond.deref(),
+                None,
+                ty,
+            );
+            let mut then_instructions = Vec::new();
+
+            for stmt in &if_expr.then_branch.stmts {
+                translate_statement(module, function, &mut then_instructions, stmt);
+            }
+
+            let else_instructions = if_expr.else_branch.clone().map(|(_, expr)| {
+                let mut else_instructions = Vec::new();
+                translate_expression(
+                    module,
+                    function,
+                    &mut else_instructions,
+                    expr.deref(),
+                    None,
+                    ty,
+                );
+                else_instructions
+            });
+
+            current_block.push(WatInstruction::r#if(then_instructions, else_instructions))
+        }
         Expr::Index(expr_index) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = &*expr_index.expr {
-                let array_name = format!("${}", path.segments[0].ident.to_string());
+                let array_name = format!("${}", path.segments[0].ident);
                 current_block.push(WatInstruction::local_get(&array_name));
                 translate_expression(
                     module,
                     function,
                     current_block,
-                    &*expr_index.index,
-                    &None,
-                    &Some(WasmType::I32),
+                    expr_index.index.deref(),
+                    None,
+                    Some(&WasmType::I32),
                 );
                 let array_type = get_array_type(module, function, &array_name).unwrap();
                 current_block.push(WatInstruction::array_get(array_type));
@@ -692,16 +887,10 @@ fn translate_expression(
         Expr::Infer(_) => todo!("translate_expression: Expr::Infer(_) "),
         Expr::Let(_) => todo!("translate_expression: Expr::Let(_) "),
         Expr::Lit(expr_lit) => {
-            let ty = if let Some(WasmType::Ref(name, _)) = ty.clone() {
-                get_element_type(module, function, &name)
-                    .map_err(|_| anyhow!("Type needs to be known for a literal"))
-                    .unwrap()
-            } else {
-                ty.clone()
-                    .ok_or(anyhow!("Type needs to be known for a literal"))
-                    .unwrap()
-            };
-            translate_lit(module, function, current_block, &expr_lit.lit, &ty)
+            let ty = ty
+                .ok_or(anyhow!("Type needs to be known for a literal"))
+                .unwrap();
+            translate_lit(module, function, current_block, &expr_lit.lit, ty)
         }
         Expr::Loop(_) => todo!("translate_expression: Expr::Loop(_) "),
         Expr::Macro(_) => todo!("translate_expression: Expr::Macro(_) "),
@@ -718,11 +907,32 @@ fn translate_expression(
         Expr::Repeat(_) => todo!("translate_expression: Expr::Repeat(_) "),
         Expr::Return(ret) => {
             if let Some(expr) = &ret.expr {
-                translate_expression(module, function, current_block, expr, &None, &None)
+                translate_expression(module, function, current_block, expr, None, None)
             }
             current_block.push(WatInstruction::Return);
         }
-        Expr::Struct(_) => todo!("translate_expression: Expr::Struct(_) "),
+        Expr::Struct(expr_struct) => {
+            let ident = &expr_struct.path.segments[0].ident;
+            let type_name = format!("${ident}");
+
+            let mut i = 0;
+            // TODO: for some reason .enumerate() doesn't work here, I don't have time to
+            // investigate
+            for field in &expr_struct.fields {
+                let ty =
+                    get_struct_field_type(module, function, current_block, &type_name, i).unwrap();
+                translate_expression(
+                    module,
+                    function,
+                    current_block,
+                    &field.expr,
+                    None,
+                    Some(&ty),
+                );
+                i += 1;
+            }
+            current_block.push(WatInstruction::struct_new(type_name));
+        }
         Expr::Try(_) => todo!("translate_expression: Expr::Try(_) "),
         Expr::TryBlock(_) => todo!("translate_expression: Expr::TryBlock(_) "),
         Expr::Tuple(_) => todo!("translate_expression: Expr::Tuple(_) "),
@@ -749,6 +959,7 @@ impl ToTokens for OurWasmType {
             WasmType::I64 => quote! { wazap_ast::WasmType::I64 },
             WasmType::F32 => quote! { wazap_ast::WasmType::F32 },
             WasmType::F64 => quote! { wazap_ast::WasmType::F64 },
+            WasmType::I8 => quote! { wazap_ast::WasmType::I8 },
             WasmType::I31Ref => quote! { wazap_ast::WasmType::I31Ref },
             WasmType::Anyref => quote! { wazap_ast::WasmType::Anyref },
             WasmType::Ref(r, nullable) => {
@@ -821,8 +1032,14 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::F32Eqz => quote! { wazap_ast::WatInstruction::F32Eqz },
             WatInstruction::F64Eqz => quote! { wazap_ast::WatInstruction::F64Eqz },
 
-            WatInstruction::StructNew(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::StructNew(_) ")
+            WatInstruction::StructNew(type_name) => {
+                quote! { wazap_ast::WatInstruction::StructNew(#type_name.to_string()) }
+            }
+            WatInstruction::StructGet(type_name, field_name) => {
+                quote! { wazap_ast::WatInstruction::StructGet(#type_name.to_string(), #field_name.to_string() ) }
+            }
+            WatInstruction::StructSet(type_name, field_name) => {
+                quote! { wazap_ast::WatInstruction::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
             WatInstruction::ArrayNew(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::ArrayNew(_) ")
@@ -861,11 +1078,9 @@ impl ToTokens for OurWatInstruction {
                     wazap_ast::WatInstruction::r#loop(#label, vec![#(#instructions),*])
                 }
             }
-            WatInstruction::If {
-                condition,
-                then,
-                r#else,
-            } => todo!("impl ToTokens for OurWatInstruction: WatInstruction::If "),
+            WatInstruction::If { then, r#else } => {
+                todo!("impl ToTokens for OurWatInstruction: WatInstruction::If ")
+            }
             WatInstruction::BrIf(label) => {
                 quote! { wazap_ast::WatInstruction::br_if(#label) }
             }
@@ -1092,9 +1307,11 @@ fn translate_statement(
                 todo!("Stmt::Local(local): syn::Pat::TupleStruct(_) ")
             }
             syn::Pat::Type(pat_type) => {
+                println!("pat_type: {pat_type:#?}");
                 let (name, ty) = translate_pat_type(function, pat_type);
+                println!("init: {:#?}", local.init);
                 let ty = ty
-                    .ok_or(anyhow!("Coul not translate type in a local statement"))
+                    .ok_or(anyhow!("Could not translate type in a local statement"))
                     .unwrap(); // type should be known at this point
                 function.add_local_exact(&name, ty.clone());
 
@@ -1104,8 +1321,8 @@ fn translate_statement(
                         function,
                         instructions,
                         &init.expr,
-                        &Some(Semi::default()),
-                        &Some(ty),
+                        Some(Semi::default()),
+                        Some(&ty),
                     );
                     instructions.push(WatInstruction::local_set(name));
                 }
@@ -1116,7 +1333,7 @@ fn translate_statement(
         },
         Stmt::Item(_) => todo!("Stmt::Item(_) "),
         Stmt::Expr(expr, semi) => {
-            translate_expression(module, function, instructions, expr, semi, &None)
+            translate_expression(module, function, instructions, expr, *semi, None)
         }
         Stmt::Macro(_) => todo!("Stmt::Macro(_) "),
     }
