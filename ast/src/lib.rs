@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::{self, write};
+use std::fmt::{self};
 use std::str::FromStr;
 
 pub use indexmap::IndexMap;
@@ -360,8 +360,8 @@ impl WatInstruction {
 
     pub fn array_new(
         name: impl Into<String>,
-        init: Box<WatInstruction>,
-        length: Box<WatInstruction>,
+        _init: Box<WatInstruction>,
+        _length: Box<WatInstruction>,
     ) -> Box<Self> {
         Box::new(Self::ArrayNew(name.into()))
     }

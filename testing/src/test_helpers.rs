@@ -1,6 +1,6 @@
 use anyhow::Result;
+use std::fs;
 use std::process::Command;
-use std::{fs, path::Path};
 use tempfile::TempDir;
 use wazap_ast::{Signature, WasmType, WatModule};
 
