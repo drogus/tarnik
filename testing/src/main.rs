@@ -5,11 +5,11 @@ fn main() {
          type String = [mut i8];
 
         fn run() {
-            let str: String = "foo";
+            let str: String;
+            str = "foo";
             str[2] = 'i';
-            if str[0] == 'f' {
-
-            }
+            assert(1, "This should not throw");
+            assert(0, "This should throw");
         }
     };
 

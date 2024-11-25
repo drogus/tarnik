@@ -85,8 +85,9 @@ struct Function {
 
 #[derive(Debug, Clone)]
 struct GlobalScope {
-    functions: Vec<Function>,
     types: IndexMap<String, WasmType>,
+    functions: Vec<WatFunction>,
+    module: WatModule,
 }
 
 impl Parse for GlobalScope {
@@ -108,7 +109,44 @@ impl Parse for GlobalScope {
             }
         }
 
-        Ok(Self { functions, types })
+        let mut module = WatModule::new();
+        // for now just hardcode the exception tag
+        types.insert(
+            "$ExceptionType".to_string(),
+            WasmType::Func {
+                params: vec![WasmType::I32, WasmType::I32],
+                result: None,
+            },
+        );
+
+        module
+            .tags
+            .insert("$AssertException".to_string(), "$ExceptionType".to_string());
+
+        for (name, ty) in types.clone() {
+            module.add_type(name.clone(), ty.clone());
+        }
+
+        let mut wat_functions = Vec::new();
+        for f in functions {
+            let mut wat_function = WatFunction::new(&f.name);
+            for param in &f.parameters {
+                wat_function.add_param(format!("${}", param.name), &param.ty);
+            }
+
+            let mut instructions = Vec::new();
+            for stmt in &f.body {
+                translate_statement(&mut module, &mut wat_function, &mut instructions, stmt)?;
+            }
+            wat_function.body = instructions.into_iter().map(|i| Box::new(i)).collect();
+            wat_functions.push(wat_function);
+        }
+
+        Ok(Self {
+            functions: wat_functions,
+            types,
+            module,
+        })
     }
 }
 
@@ -344,6 +382,7 @@ fn translate_binary(
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
                 WasmType::Array { mutable, ty } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
+                WasmType::Func { .. } => todo!("translate_binary: WasmType::Struct(_) "),
             };
 
             current_block.push(instruction);
@@ -371,6 +410,7 @@ fn translate_binary(
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
                 WasmType::Array { mutable, ty } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
+                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
             };
 
             current_block.push(instruction);
@@ -618,9 +658,9 @@ fn translate_for_loop(
     function: &mut WatFunction,
     block: &mut Vec<WatInstruction>,
     for_loop_expr: &ExprForLoop,
-) {
+) -> Result<()> {
     let var_name = format!("${}", extract_name_from_pattern(for_loop_expr.pat.deref()));
-    translate_expression(module, function, block, &for_loop_expr.expr, None, None);
+    translate_expression(module, function, block, &for_loop_expr.expr, None, None)?;
     let ty = get_type(module, function, block).unwrap();
     let for_target_local = function.add_local("$for_target", ty.clone());
     let length_local = function.add_local("$length", WasmType::I32);
@@ -660,7 +700,7 @@ fn translate_for_loop(
     //   (local.set $current)
     //
     for stmt in &for_loop_expr.body.stmts {
-        translate_statement(module, function, &mut instructions, stmt);
+        translate_statement(module, function, &mut instructions, stmt)?;
     }
 
     instructions.push(WatInstruction::local_get(&i_local));
@@ -676,6 +716,8 @@ fn translate_for_loop(
 
     block.push(block_instr);
     //wat_function.body = instructions.into_iter().map(|i| Box::new(i)).collect();
+
+    Ok(())
 }
 
 fn translate_lit(
@@ -684,14 +726,29 @@ fn translate_lit(
     mut current_block: &mut Vec<WatInstruction>,
     lit: &syn::Lit,
     ty: Option<&WasmType>,
-) {
+) -> Result<()> {
     let mut instr = match lit {
-        syn::Lit::Str(lit_str) => lit_str
-            .value()
-            .as_bytes()
-            .iter()
-            .map(|b| WatInstruction::I32Const(*b as i32))
-            .collect(),
+        syn::Lit::Str(lit_str) => {
+            let typeidx = if let Some(WasmType::Ref(typeidx, _)) = ty {
+                typeidx
+            } else {
+                return Err(syn::Error::new_spanned(
+                    lit,
+                    "string literal may only be assigned to an i8 array",
+                ));
+            };
+            let mut instructions: Vec<WatInstruction> = lit_str
+                .value()
+                .as_bytes()
+                .iter()
+                .map(|b| WatInstruction::I32Const(*b as i32))
+                .collect();
+            instructions.push(WatInstruction::ArrayNewFixed(
+                typeidx.clone(),
+                instructions.len() as u16,
+            ));
+            instructions
+        }
         syn::Lit::ByteStr(_) => todo!("translate_lit: syn::Lit::ByteStr(_) "),
         syn::Lit::CStr(_) => todo!("translate_lit: syn::Lit::CStr(_) "),
         syn::Lit::Byte(_) => todo!("translate_lit: syn::Lit::Byte(_) "),
@@ -717,6 +774,8 @@ fn translate_lit(
         _ => todo!("translate_lit: _ "),
     };
     current_block.append(&mut instr);
+
+    Ok(())
 }
 
 // TODO: the passing of all of those details is getting ridiculous. I would like to rewrite
@@ -729,7 +788,7 @@ fn translate_expression(
     expr: &Expr,
     _: Option<Semi>,
     ty: Option<&WasmType>,
-) {
+) -> Result<()> {
     match expr {
         Expr::Array(expr_array) => {
             if let Some(WasmType::Ref(typeidx, _)) = ty {
@@ -749,7 +808,7 @@ fn translate_expression(
                         elem,
                         None,
                         Some(&elem_type),
-                    );
+                    )?;
                 }
                 current_block.push(WatInstruction::ArrayNewFixed(
                     typeidx.to_string(),
@@ -772,7 +831,7 @@ fn translate_expression(
                             expr_index.index.deref(),
                             None,
                             Some(&WasmType::I32),
-                        );
+                        )?;
                         let array_type = get_array_type(module, function, &array_name).unwrap();
                         let element_type = get_element_type(module, function, &array_type).unwrap();
                         translate_expression(
@@ -782,7 +841,7 @@ fn translate_expression(
                             expr_assign.right.deref(),
                             None,
                             Some(&element_type),
-                        );
+                        )?;
                         current_block.push(WatInstruction::array_set(array_type));
                     } else {
                         // TODO: this should be tied to the code line
@@ -792,6 +851,7 @@ fn translate_expression(
                 Expr::Path(expr_path) => {
                     let path = format!("${}", expr_path.path.segments[0].ident);
                     let local_type = get_local_type(module, function, &path).unwrap();
+                    println!("assign local_type: {local_type:#?}");
                     translate_expression(
                         module,
                         function,
@@ -799,7 +859,7 @@ fn translate_expression(
                         expr_assign.right.deref(),
                         None,
                         Some(&local_type),
-                    );
+                    )?;
                     current_block.push(WatInstruction::local_set(path));
                 }
                 Expr::Field(expr_field) => match &*expr_field.base {
@@ -842,7 +902,7 @@ fn translate_expression(
                             expr_assign.right.deref(),
                             None,
                             Some(&field_type),
-                        );
+                        )?;
                         current_block.push(WatInstruction::struct_set(&type_name, &field_name));
                     }
                     _ => panic!("Only path is possible to use with a field access"),
@@ -887,11 +947,59 @@ fn translate_expression(
         Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
         Expr::Call(expr_call) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = expr_call.func.deref() {
-                for arg in &expr_call.args {
-                    translate_expression(module, function, current_block, arg, None, ty);
-                }
+                let func_name = path.segments[0].ident.to_string();
 
-                current_block.push(WatInstruction::call(format!("${}", path.segments[0].ident)));
+                println!("func_name: {func_name}");
+                if func_name == "assert" {
+                    if expr_call.args.len() != 2 {
+                        return Err(syn::Error::new_spanned(
+                            &expr_call.args,
+                            "assert function requires exactly 2 arguments: condition and message",
+                        ));
+                    }
+
+                    // Get the condition
+                    let mut condition_instructions = Vec::new();
+                    translate_expression(
+                        module,
+                        function,
+                        &mut condition_instructions,
+                        &expr_call.args[0],
+                        None,
+                        None,
+                    )?;
+
+                    // Get the message
+                    if let Expr::Lit(expr_lit) = &expr_call.args[1] {
+                        if let syn::Lit::Str(lit_str) = &expr_lit.lit {
+                            let message = lit_str.value();
+                            let (offset, len) = module.add_data(message);
+
+                            // Generate assertion code
+                            current_block.append(&mut condition_instructions);
+                            current_block.push(WatInstruction::I32Eqz);
+
+                            // If condition is true (non-zero), log message and throw
+                            let then_block = vec![
+                                WatInstruction::i32_const(offset as i32),
+                                WatInstruction::i32_const(len as i32),
+                                WatInstruction::throw("$AssertException".to_string()),
+                            ];
+
+                            current_block.push(WatInstruction::r#if(then_block, None));
+                        } else {
+                            panic!("Second argument of assert must be a string literal");
+                        }
+                    } else {
+                        panic!("Second argument of assert must be a string literal");
+                    }
+                } else {
+                    // Regular function call
+                    for arg in &expr_call.args {
+                        translate_expression(module, function, current_block, arg, None, ty)?;
+                    }
+                    current_block.push(WatInstruction::call(format!("${}", func_name)));
+                }
             } else {
                 panic!("Only calling functions by path is supported at the moment");
             }
@@ -916,7 +1024,7 @@ fn translate_expression(
             _ => panic!("Only path is possible to use with a field access"),
         },
         Expr::ForLoop(for_loop_expr) => {
-            translate_for_loop(module, function, current_block, for_loop_expr)
+            translate_for_loop(module, function, current_block, for_loop_expr)?;
         }
         Expr::Group(_) => todo!("translate_expression: Expr::Group(_) "),
         Expr::If(if_expr) => {
@@ -927,11 +1035,11 @@ fn translate_expression(
                 if_expr.cond.deref(),
                 None,
                 ty,
-            );
+            )?;
             let mut then_instructions = Vec::new();
 
             for stmt in &if_expr.then_branch.stmts {
-                translate_statement(module, function, &mut then_instructions, stmt);
+                translate_statement(module, function, &mut then_instructions, stmt)?;
             }
 
             let else_instructions = if_expr.else_branch.clone().map(|(_, expr)| {
@@ -943,7 +1051,8 @@ fn translate_expression(
                     expr.deref(),
                     None,
                     ty,
-                );
+                )
+                .unwrap();
                 else_instructions
             });
 
@@ -960,7 +1069,7 @@ fn translate_expression(
                     expr_index.index.deref(),
                     None,
                     Some(&WasmType::I32),
-                );
+                )?;
                 let array_type = get_array_type(module, function, &array_name).unwrap();
 
                 let element_type = get_element_type(module, function, &array_type).unwrap();
@@ -976,7 +1085,7 @@ fn translate_expression(
         }
         Expr::Infer(_) => todo!("translate_expression: Expr::Infer(_) "),
         Expr::Let(_) => todo!("translate_expression: Expr::Let(_) "),
-        Expr::Lit(expr_lit) => translate_lit(module, function, current_block, &expr_lit.lit, ty),
+        Expr::Lit(expr_lit) => translate_lit(module, function, current_block, &expr_lit.lit, ty)?,
         Expr::Loop(_) => todo!("translate_expression: Expr::Loop(_) "),
         Expr::Macro(_) => todo!("translate_expression: Expr::Macro(_) "),
         Expr::Match(_) => todo!("translate_expression: Expr::Match(_) "),
@@ -992,7 +1101,7 @@ fn translate_expression(
         Expr::Repeat(_) => todo!("translate_expression: Expr::Repeat(_) "),
         Expr::Return(ret) => {
             if let Some(expr) = &ret.expr {
-                translate_expression(module, function, current_block, expr, None, None)
+                translate_expression(module, function, current_block, expr, None, None)?;
             }
             current_block.push(WatInstruction::Return);
         }
@@ -1013,7 +1122,7 @@ fn translate_expression(
                     &field.expr,
                     None,
                     Some(&ty),
-                );
+                )?;
                 i += 1;
             }
             current_block.push(WatInstruction::struct_new(type_name));
@@ -1028,6 +1137,8 @@ fn translate_expression(
         Expr::Yield(_) => todo!("translate_expression: Expr::Yield(_) "),
         _ => todo!("translate_expression: _ "),
     }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1071,7 +1182,24 @@ impl ToTokens for OurWasmType {
                     quote! { wazap_ast::StructField { name: #name, ty: #ty, mutable: #mutable } }
                 });
                 quote! {
-                wazap_ast::WasmType::Struct(vec![#(#fields),*]) }
+                    wazap_ast::WasmType::Struct(vec![#(#fields),*])
+                }
+            }
+            WasmType::Func { params, result } => {
+                let result = if let Some(result) = result {
+                    let result = OurWasmType(result.deref().clone());
+                    quote! { Some(#result) }
+                } else {
+                    quote! { None }
+                };
+                let params = params.iter().map(|param| {
+                    let param = OurWasmType(param.clone());
+                    quote! { #param }
+                });
+
+                quote! {
+                    wazap_ast::WasmType::Func { params: vec![#(#params),*], result: #result }
+                }
             }
         };
         tokens.extend(tokens_str);
@@ -1200,8 +1328,8 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::RefI31 => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
             }
-            WatInstruction::Throw(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::Throw(_) ")
+            WatInstruction::Throw(label) => {
+                quote! { wazap_ast::WatInstruction::Throw(#label.to_string()) }
             }
             WatInstruction::Try {
                 try_block,
@@ -1394,7 +1522,7 @@ fn translate_statement(
     function: &mut WatFunction,
     instructions: &mut Vec<WatInstruction>,
     stmt: &Stmt,
-) {
+) -> Result<()> {
     match stmt {
         Stmt::Local(local) => match &local.pat {
             syn::Pat::Const(_) => todo!("Stmt::Local(local): syn::Pat::Const(_) "),
@@ -1420,6 +1548,7 @@ fn translate_statement(
                     .unwrap(); // type should be known at this point
                 function.add_local_exact(&name, ty.clone());
 
+                println!("local.init {:#?}\n{ty:#?}", local.init);
                 if let Some(init) = &local.init {
                     translate_expression(
                         module,
@@ -1428,7 +1557,7 @@ fn translate_statement(
                         &init.expr,
                         Some(Semi::default()),
                         Some(&ty),
-                    );
+                    )?;
                     instructions.push(WatInstruction::local_set(name));
                 }
             }
@@ -1438,20 +1567,24 @@ fn translate_statement(
         },
         Stmt::Item(_) => todo!("Stmt::Item(_) "),
         Stmt::Expr(expr, semi) => {
-            translate_expression(module, function, instructions, expr, *semi, None)
+            translate_expression(module, function, instructions, expr, *semi, None)?;
         }
         Stmt::Macro(_) => todo!("Stmt::Macro(_) "),
     }
+
+    Ok(())
 }
 
 #[proc_macro]
 pub fn wasm(input: TokenStream) -> TokenStream {
     let global_scope = parse_macro_input!(input as GlobalScope);
 
-    let mut module = WatModule::new();
-    for (name, ty) in global_scope.types.clone() {
-        module.add_type(name.clone(), ty.clone());
-    }
+    let data = global_scope.module.data.into_iter().map(|(offset, data)| {
+        quote! {
+            module.data.push((#offset, #data.to_string()));
+        }
+    });
+
     // TODO: this could be moved to WatModule ToTokens
     let types = global_scope.types.into_iter().map(|(name, ty)| {
         let ty = OurWasmType(ty);
@@ -1460,20 +1593,18 @@ pub fn wasm(input: TokenStream) -> TokenStream {
         }
     });
 
-    // Generate Rust code that builds the WAT module
-    let functions = global_scope.functions.iter().map(|f| {
-        let mut wat_function = WatFunction::new(&f.name);
-        for param in &f.parameters {
-            wat_function.add_param(format!("${}", param.name), &param.ty);
-        }
+    let tags = global_scope
+        .module
+        .tags
+        .into_iter()
+        .map(|(name, type_name)| {
+            quote! {
+                module.tags.insert(#name.to_string(), #type_name.to_string());
+            }
+        });
 
-        let mut instructions = Vec::new();
-        for stmt in &f.body {
-            translate_statement(&mut module, &mut wat_function, &mut instructions, stmt);
-        }
-        wat_function.body = instructions.into_iter().map(|i| Box::new(i)).collect();
-
-        let our = OurWatFunction(wat_function);
+    let functions = global_scope.functions.into_iter().map(|f| {
+        let our = OurWatFunction(f.clone());
         quote! {
             #our
 
@@ -1485,14 +1616,18 @@ pub fn wasm(input: TokenStream) -> TokenStream {
         {
             let mut module = wazap_ast::WatModule::new();
 
+            #(#data)*
+
             #(#types)*
+
+            #(#tags)*
 
             #(#functions)*
 
             module
         }
     };
-    println!("output:\n{}", output.to_string());
+    println!("output:\n{}", output);
 
     output.into()
 }

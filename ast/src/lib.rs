@@ -48,8 +48,15 @@ pub enum WasmType {
     I31Ref,
     Anyref,
     Ref(String, Nullable),
-    Array { mutable: bool, ty: Box<WasmType> },
+    Array {
+        mutable: bool,
+        ty: Box<WasmType>,
+    },
     Struct(Vec<StructField>),
+    Func {
+        params: Vec<WasmType>,
+        result: Option<Box<WasmType>>,
+    },
 }
 
 impl WasmType {
@@ -145,13 +152,27 @@ impl fmt::Display for WasmType {
             WasmType::I31Ref => write!(f, "i31ref"),
             WasmType::Ref(name, nullable) => write!(f, "(ref {nullable} {name})"),
             WasmType::Array { mutable, ty } => {
-                let m = if *mutable { "mut" } else { "" };
-                write!(f, "(array {m} {ty})")
+                let m = if *mutable {
+                    format!("(mut {ty})")
+                } else {
+                    ty.to_string()
+                };
+                write!(f, "(array {m})")
             }
             WasmType::Struct(fields) => {
                 write!(f, "(struct")?;
                 for field in fields {
                     write!(f, "  {field}")?;
+                }
+                write!(f, ")")
+            }
+            WasmType::Func { params, result } => {
+                write!(f, "(func")?;
+                for param in params {
+                    write!(f, " (param {param})")?;
+                }
+                if let Some(result) = result {
+                    write!(f, " (result {result})")?;
                 }
                 write!(f, ")")
             }
@@ -398,8 +419,8 @@ impl WatInstruction {
         Self::RefI31
     }
 
-    pub fn throw(label: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Throw(label.into()))
+    pub fn throw(label: impl Into<String>) -> Self {
+        Self::Throw(label.into())
     }
 
     pub fn r#type(name: impl Into<String>) -> Box<Self> {
@@ -630,21 +651,29 @@ impl fmt::Display for WatFunction {
 
 #[derive(Debug, Clone, Default)]
 pub struct WatModule {
+    pub tags: IndexMap<String, String>,
     pub types: IndexMap<String, WasmType>,
     pub imports: Vec<(String, String, WasmType)>,
     pub functions: Vec<WatFunction>,
     pub exports: Vec<(String, String)>,
     pub globals: Vec<(String, WasmType, WatInstruction)>,
+    pub data: Vec<(usize, String)>,
+    pub data_offset: usize,
+    pub data_offsets: HashMap<String, usize>,
 }
 
 impl WatModule {
     pub fn new() -> Self {
         WatModule {
+            tags: IndexMap::new(),
             types: IndexMap::new(),
             imports: Vec::new(),
             functions: Vec::new(),
             exports: Vec::new(),
             globals: Vec::new(),
+            data: Vec::new(),
+            data_offset: 100,
+            data_offsets: HashMap::new(),
         }
     }
 
@@ -659,6 +688,25 @@ impl WatModule {
     pub fn add_type(&mut self, name: impl Into<String>, ty: WasmType) {
         self.types.insert(name.into(), ty);
     }
+
+    pub fn add_data(&mut self, content: String) -> (usize, usize) {
+        let len = content.len();
+        let offset = self.data_offset;
+        if let Some(offset) = self.data_offsets.get(&content) {
+            (*offset, len)
+        } else {
+            self.data.push((offset, content.clone()));
+            self.data_offsets.insert(content, offset);
+            self.data_offset += if len % 4 == 0 {
+                len
+            } else {
+                // some runtimes expect all data aligned to 4 bytes
+                len + (4 - len % 4)
+            };
+
+            (offset, len)
+        }
+    }
 }
 
 impl fmt::Display for WatModule {
@@ -668,14 +716,36 @@ impl fmt::Display for WatModule {
             writeln!(f, "  (type {name} {ty})")?;
         }
 
+        for (label, typeidx) in &self.tags {
+            writeln!(f, "  (tag {label} (type {typeidx}))")?;
+        }
+
         // Imports
         for (module, name, type_) in &self.imports {
             writeln!(f, "  (import \"{}\" \"{}\" {})", module, name, type_)?;
         }
 
+        // Data
+        for (offset, data) in &self.data {
+            write!(f, "  (data (i32.const {}) \"", offset)?;
+            // TODO: this escaping should be done when inserting the data
+            for &byte in data.as_bytes() {
+                match byte {
+                    b'"' => write!(f, "\\\"")?,
+                    b'\\' => write!(f, "\\\\")?,
+                    b'\n' => write!(f, "\\n")?,
+                    b'\r' => write!(f, "\\r")?,
+                    b'\t' => write!(f, "\\t")?,
+                    _ if byte.is_ascii_graphic() || byte == b' ' => write!(f, "{}", byte as char)?,
+                    _ => write!(f, "\\{:02x}", byte)?,
+                }
+            }
+            writeln!(f, "\")")?;
+        }
+
         // Function declarations
         for function in &self.functions {
-            write!(f, "(elem declare func ${})\n", function.name)?;
+            writeln!(f, "(elem declare func ${})", function.name)?;
         }
 
         // Functions
