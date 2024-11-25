@@ -39,6 +39,12 @@ impl fmt::Display for StructField {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Signature {
+    pub params: Vec<WasmType>,
+    pub result: Option<Box<WasmType>>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum WasmType {
     I32,
     I64,
@@ -53,9 +59,10 @@ pub enum WasmType {
         ty: Box<WasmType>,
     },
     Struct(Vec<StructField>),
-    Func {
-        params: Vec<WasmType>,
-        result: Option<Box<WasmType>>,
+    Func(Box<Signature>),
+    Tag {
+        name: String,
+        signature: Box<Signature>,
     },
 }
 
@@ -166,12 +173,22 @@ impl fmt::Display for WasmType {
                 }
                 write!(f, ")")
             }
-            WasmType::Func { params, result } => {
+            WasmType::Func(signature) => {
                 write!(f, "(func")?;
-                for param in params {
+                for param in &signature.params {
                     write!(f, " (param {param})")?;
                 }
-                if let Some(result) = result {
+                if let Some(result) = &signature.result {
+                    write!(f, " (result {result})")?;
+                }
+                write!(f, ")")
+            }
+            WasmType::Tag { name, signature } => {
+                write!(f, "(tag {name}")?;
+                for param in &signature.params {
+                    write!(f, " (param {param})")?;
+                }
+                if let Some(result) = &signature.result {
                     write!(f, " (result {result})")?;
                 }
                 write!(f, ")")
@@ -194,6 +211,10 @@ impl FromStr for WasmType {
             "i8" => Self::I8,
             "i31ref" => Self::I31Ref,
             "anyref" => Self::Anyref,
+            // this should not go here, as this crate is supposed to not
+            // be tied to a certain implementation, but for now I'm leaving it here
+            // TODO: fix this
+            "bool" => Self::I32,
             _ => {
                 // for now just handle custom types
                 Self::Ref(format!("${s}"), Nullable::False)
@@ -655,11 +676,13 @@ pub struct WatModule {
     pub types: IndexMap<String, WasmType>,
     pub imports: Vec<(String, String, WasmType)>,
     pub functions: Vec<WatFunction>,
-    pub exports: Vec<(String, String)>,
+    // TODO: changet it to a struct
+    pub exports: Vec<(String, String, String)>,
     pub globals: Vec<(String, WasmType, WatInstruction)>,
     pub data: Vec<(usize, String)>,
     pub data_offset: usize,
     pub data_offsets: HashMap<String, usize>,
+    pub memories: HashMap<String, i32>,
 }
 
 impl WatModule {
@@ -674,6 +697,7 @@ impl WatModule {
             data: Vec::new(),
             data_offset: 100,
             data_offsets: HashMap::new(),
+            memories: HashMap::new(),
         }
     }
 
@@ -707,15 +731,40 @@ impl WatModule {
             (offset, len)
         }
     }
+
+    pub fn add_memory(&mut self, label: impl Into<String>, size: i32) {
+        self.memories.insert(label.into(), size);
+    }
+
+    pub fn add_export(
+        &mut self,
+        export_name: impl Into<String>,
+        export_type: impl Into<String>,
+        name: impl Into<String>,
+    ) {
+        self.exports
+            .push((export_name.into(), export_type.into(), name.into()));
+    }
+
+    pub fn add_import(
+        &mut self,
+        namespace: impl Into<String>,
+        name: impl Into<String>,
+        ty: WasmType,
+    ) {
+        self.imports.push((namespace.into(), name.into(), ty));
+    }
 }
 
 impl fmt::Display for WatModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "(module")?;
         // Types
         for (name, ty) in &self.types {
             writeln!(f, "  (type {name} {ty})")?;
         }
 
+        // Tags
         for (label, typeidx) in &self.tags {
             writeln!(f, "  (tag {label} (type {typeidx}))")?;
         }
@@ -723,6 +772,11 @@ impl fmt::Display for WatModule {
         // Imports
         for (module, name, type_) in &self.imports {
             writeln!(f, "  (import \"{}\" \"{}\" {})", module, name, type_)?;
+        }
+
+        // Memories
+        for (label, size) in &self.memories {
+            writeln!(f, "  (memory {label} {size})")?;
         }
 
         // Data
@@ -743,6 +797,11 @@ impl fmt::Display for WatModule {
             writeln!(f, "\")")?;
         }
 
+        // Globals
+        for (name, type_, init) in &self.globals {
+            writeln!(f, "  (global ${} {} {})", name, type_, init)?;
+        }
+
         // Function declarations
         for function in &self.functions {
             writeln!(f, "(elem declare func ${})", function.name)?;
@@ -754,14 +813,15 @@ impl fmt::Display for WatModule {
         }
 
         // Exports
-        for (name, internal_name) in &self.exports {
-            writeln!(f, "  (export \"{}\" {})", name, internal_name)?;
+        for (name, export_type, internal_name) in &self.exports {
+            writeln!(
+                f,
+                "  (export \"{}\" ({export_type} {}))",
+                name, internal_name
+            )?;
         }
 
-        // Globals
-        for (name, type_, init) in &self.globals {
-            writeln!(f, "  (global ${} {} {})", name, type_, init)?;
-        }
+        writeln!(f, ")")?;
 
         Ok(())
     }

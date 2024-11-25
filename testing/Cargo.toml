@@ -7,3 +7,7 @@ rust-version.workspace = true
 [dependencies]
 wazap-generator = { path = "../generator" }
 wazap-ast = { path = "../ast" }
+anyhow = "1.0"
+tempfile = "3.8"
+assert_cmd = "2.0"
+predicates = "3.0"

@@ -110,18 +110,6 @@ impl Parse for GlobalScope {
         }
 
         let mut module = WatModule::new();
-        // for now just hardcode the exception tag
-        types.insert(
-            "$ExceptionType".to_string(),
-            WasmType::Func {
-                params: vec![WasmType::I32, WasmType::I32],
-                result: None,
-            },
-        );
-
-        module
-            .tags
-            .insert("$AssertException".to_string(), "$ExceptionType".to_string());
 
         for (name, ty) in types.clone() {
             module.add_type(name.clone(), ty.clone());
@@ -382,7 +370,8 @@ fn translate_binary(
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
                 WasmType::Array { mutable, ty } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
-                WasmType::Func { .. } => todo!("translate_binary: WasmType::Struct(_) "),
+                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
+                WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
             };
 
             current_block.push(instruction);
@@ -411,6 +400,7 @@ fn translate_binary(
                 WasmType::Array { mutable, ty } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
                 WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
+                WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
             };
 
             current_block.push(instruction);
@@ -621,8 +611,8 @@ fn get_struct_field_type_by_name(
 
 fn get_struct_field_type(
     module: &WatModule,
-    function: &WatFunction,
-    instructions: &Vec<WatInstruction>,
+    _function: &WatFunction,
+    _instructions: &Vec<WatInstruction>,
     type_name: &str,
     field_index: usize,
 ) -> anyhow::Result<WasmType> {
@@ -639,7 +629,7 @@ fn get_struct_field_type(
 
 fn get_element_type(
     module: &WatModule,
-    function: &WatFunction,
+    _function: &WatFunction,
     name: &str,
 ) -> anyhow::Result<WasmType> {
     let ty = module
@@ -851,7 +841,6 @@ fn translate_expression(
                 Expr::Path(expr_path) => {
                     let path = format!("${}", expr_path.path.segments[0].ident);
                     let local_type = get_local_type(module, function, &path).unwrap();
-                    println!("assign local_type: {local_type:#?}");
                     translate_expression(
                         module,
                         function,
@@ -922,7 +911,7 @@ fn translate_expression(
                 binary.left.deref(),
                 None,
                 None,
-            );
+            )?;
             translate_expression(
                 module,
                 function,
@@ -930,7 +919,7 @@ fn translate_expression(
                 binary.right.deref(),
                 None,
                 None,
-            );
+            )?;
 
             // TODO: handle casts and/or error handling
 
@@ -943,13 +932,16 @@ fn translate_expression(
                 &mut right_instructions,
             );
         }
-        Expr::Block(_) => todo!("translate_expression: Expr::Block(_) "),
+        Expr::Block(expr_block) => {
+            for stmt in &expr_block.block.stmts {
+                translate_statement(module, function, current_block, stmt)?;
+            }
+        }
         Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
         Expr::Call(expr_call) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = expr_call.func.deref() {
                 let func_name = path.segments[0].ident.to_string();
 
-                println!("func_name: {func_name}");
                 if func_name == "assert" {
                     if expr_call.args.len() != 2 {
                         return Err(syn::Error::new_spanned(
@@ -1185,20 +1177,38 @@ impl ToTokens for OurWasmType {
                     wazap_ast::WasmType::Struct(vec![#(#fields),*])
                 }
             }
-            WasmType::Func { params, result } => {
-                let result = if let Some(result) = result {
+            WasmType::Func(signature) => {
+                let result = if let Some(result) = &signature.result {
                     let result = OurWasmType(result.deref().clone());
                     quote! { Some(#result) }
                 } else {
                     quote! { None }
                 };
+                let params = signature.params.clone();
                 let params = params.iter().map(|param| {
                     let param = OurWasmType(param.clone());
                     quote! { #param }
                 });
 
                 quote! {
-                    wazap_ast::WasmType::Func { params: vec![#(#params),*], result: #result }
+                    wazap_ast::WasmType::Func(Box::new(wazap_ast::Signature { params: vec![#(#params),*], result: #result }))
+                }
+            }
+            WasmType::Tag { name, signature } => {
+                let result = if let Some(result) = &signature.result {
+                    let result = OurWasmType(result.deref().clone());
+                    quote! { Some(#result) }
+                } else {
+                    quote! { None }
+                };
+                let params = signature.params.clone();
+                let params = params.iter().map(|param| {
+                    let param = OurWasmType(param.clone());
+                    quote! { #param }
+                });
+
+                quote! {
+                    wazap_ast::WasmType::Tag { name: #name.to_string(), signature: Box::new(wazap_ast::Signature { params: vec![#(#params),*], result: #result }) }
                 }
             }
         };
@@ -1295,7 +1305,7 @@ impl ToTokens for OurWatInstruction {
                 let then_instructions = then.iter().map(|i| OurWatInstruction(i.clone()));
                 let else_code = if let Some(r#else) = r#else {
                     let else_instructions = r#else.iter().map(|i| OurWatInstruction(i.clone()));
-                    quote! { vec![#(#else_instructions),*] }
+                    quote! { Some(vec![#(#else_instructions),*]) }
                 } else {
                     quote! { None }
                 };
@@ -1548,7 +1558,6 @@ fn translate_statement(
                     .unwrap(); // type should be known at this point
                 function.add_local_exact(&name, ty.clone());
 
-                println!("local.init {:#?}\n{ty:#?}", local.init);
                 if let Some(init) = &local.init {
                     translate_expression(
                         module,
@@ -1627,7 +1636,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             module
         }
     };
-    println!("output:\n{}", output);
+    // println!("output:\n{}", output);
 
     output.into()
 }
