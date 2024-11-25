@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::fs;
 use std::process::Command;
+use tarnik_ast::{Signature, WasmType, WatModule};
 use tempfile::TempDir;
-use wazap_ast::{Signature, WasmType, WatModule};
 
 pub struct TestRunner {
     temp_dir: TempDir,

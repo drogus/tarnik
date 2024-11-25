@@ -1,12 +1,12 @@
 [package]
-name = "wazap-testing"
+name = "tarnik-testing"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-wazap-generator = { path = "../generator" }
-wazap-ast = { path = "../ast" }
+tarnik = { path = "../generator" }
+tarnik-ast = { path = "../ast" }
 anyhow = "1.0"
 tempfile = "3.8"
 assert_cmd = "2.0"

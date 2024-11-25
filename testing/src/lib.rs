@@ -4,8 +4,8 @@ mod test_helpers;
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::TestRunner;
-    use wazap_ast::WatModule;
-    use wazap_generator::wasm;
+    use tarnik::wasm;
+    use tarnik_ast::WatModule;
 
     #[test]
     fn test_array_operations() -> anyhow::Result<()> {

@@ -1,5 +1,5 @@
 [package]
-name = "wazap-ast"
+name = "tarnik-ast"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

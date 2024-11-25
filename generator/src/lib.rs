@@ -18,7 +18,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
-use wazap_ast::{StructField, WasmType, WatFunction, WatInstruction, WatModule};
+use tarnik_ast::{StructField, WasmType, WatFunction, WatInstruction, WatModule};
 
 #[derive(Debug, Clone)]
 struct Parameter {
@@ -1081,23 +1081,23 @@ struct OurWatInstruction(WatInstruction);
 impl ToTokens for OurWasmType {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
         let tokens_str = match &self.0 {
-            WasmType::I32 => quote! { wazap_ast::WasmType::I32 },
-            WasmType::I64 => quote! { wazap_ast::WasmType::I64 },
-            WasmType::F32 => quote! { wazap_ast::WasmType::F32 },
-            WasmType::F64 => quote! { wazap_ast::WasmType::F64 },
-            WasmType::I8 => quote! { wazap_ast::WasmType::I8 },
-            WasmType::I31Ref => quote! { wazap_ast::WasmType::I31Ref },
-            WasmType::Anyref => quote! { wazap_ast::WasmType::Anyref },
+            WasmType::I32 => quote! { tarnik_ast::WasmType::I32 },
+            WasmType::I64 => quote! { tarnik_ast::WasmType::I64 },
+            WasmType::F32 => quote! { tarnik_ast::WasmType::F32 },
+            WasmType::F64 => quote! { tarnik_ast::WasmType::F64 },
+            WasmType::I8 => quote! { tarnik_ast::WasmType::I8 },
+            WasmType::I31Ref => quote! { tarnik_ast::WasmType::I31Ref },
+            WasmType::Anyref => quote! { tarnik_ast::WasmType::Anyref },
             WasmType::Ref(r, nullable) => {
                 let nullable = match nullable {
-                    wazap_ast::Nullable::True => quote! {wazap_ast::Nullable::True},
-                    wazap_ast::Nullable::False => quote! { wazap_ast::Nullable::False },
+                    tarnik_ast::Nullable::True => quote! {tarnik_ast::Nullable::True},
+                    tarnik_ast::Nullable::False => quote! { tarnik_ast::Nullable::False },
                 };
-                quote! { wazap_ast::WasmType::Ref(#r.to_string(), #nullable) }
+                quote! { tarnik_ast::WasmType::Ref(#r.to_string(), #nullable) }
             }
             WasmType::Array { mutable, ty } => {
                 let ty = OurWasmType(*ty.clone());
-                quote! { wazap_ast::WasmType::Array { mutable: #mutable, ty: Box::new(#ty) } }
+                quote! { tarnik_ast::WasmType::Array { mutable: #mutable, ty: Box::new(#ty) } }
             }
             WasmType::Struct(s) => {
                 let fields = s.iter().map(|field| {
@@ -1109,10 +1109,10 @@ impl ToTokens for OurWasmType {
                     };
                     let mutable = field.mutable;
 
-                    quote! { wazap_ast::StructField { name: #name, ty: #ty, mutable: #mutable } }
+                    quote! { tarnik_ast::StructField { name: #name, ty: #ty, mutable: #mutable } }
                 });
                 quote! {
-                    wazap_ast::WasmType::Struct(vec![#(#fields),*])
+                    tarnik_ast::WasmType::Struct(vec![#(#fields),*])
                 }
             }
             WasmType::Func(signature) => {
@@ -1129,7 +1129,7 @@ impl ToTokens for OurWasmType {
                 });
 
                 quote! {
-                    wazap_ast::WasmType::Func(Box::new(wazap_ast::Signature { params: vec![#(#params),*], result: #result }))
+                    tarnik_ast::WasmType::Func(Box::new(tarnik_ast::Signature { params: vec![#(#params),*], result: #result }))
                 }
             }
             WasmType::Tag { name, signature } => {
@@ -1146,7 +1146,7 @@ impl ToTokens for OurWasmType {
                 });
 
                 quote! {
-                    wazap_ast::WasmType::Tag { name: #name.to_string(), signature: Box::new(wazap_ast::Signature { params: vec![#(#params),*], result: #result }) }
+                    tarnik_ast::WasmType::Tag { name: #name.to_string(), signature: Box::new(tarnik_ast::Signature { params: vec![#(#params),*], result: #result }) }
                 }
             }
         };
@@ -1167,40 +1167,40 @@ impl ToTokens for OurWatInstruction {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::GlobalGet(_) ")
             }
             WatInstruction::LocalGet(name) => {
-                quote! { wazap_ast::WatInstruction::LocalGet(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::LocalGet(#name.to_string()) }
             }
             WatInstruction::LocalSet(name) => {
-                quote! { wazap_ast::WatInstruction::LocalSet(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::LocalSet(#name.to_string()) }
             }
             WatInstruction::Call(name) => {
-                quote! { wazap_ast::WatInstruction::Call(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::Call(#name.to_string()) }
             }
             WatInstruction::I32Const(value) => {
-                quote! { wazap_ast::WatInstruction::I32Const(#value) }
+                quote! { tarnik_ast::WatInstruction::I32Const(#value) }
             }
             WatInstruction::I64Const(value) => {
-                quote! { wazap_ast::WatInstruction::I32Const(#value) }
+                quote! { tarnik_ast::WatInstruction::I32Const(#value) }
             }
             WatInstruction::F32Const(value) => {
-                quote! { wazap_ast::WatInstruction::F32Const(#value) }
+                quote! { tarnik_ast::WatInstruction::F32Const(#value) }
             }
             WatInstruction::F64Const(value) => {
-                quote! { wazap_ast::WatInstruction::F64Const(#value) }
+                quote! { tarnik_ast::WatInstruction::F64Const(#value) }
             }
 
-            WatInstruction::I32Eqz => quote! { wazap_ast::WatInstruction::I32Eqz },
-            WatInstruction::I64Eqz => quote! { wazap_ast::WatInstruction::I64Eqz },
-            WatInstruction::F32Eqz => quote! { wazap_ast::WatInstruction::F32Eqz },
-            WatInstruction::F64Eqz => quote! { wazap_ast::WatInstruction::F64Eqz },
+            WatInstruction::I32Eqz => quote! { tarnik_ast::WatInstruction::I32Eqz },
+            WatInstruction::I64Eqz => quote! { tarnik_ast::WatInstruction::I64Eqz },
+            WatInstruction::F32Eqz => quote! { tarnik_ast::WatInstruction::F32Eqz },
+            WatInstruction::F64Eqz => quote! { tarnik_ast::WatInstruction::F64Eqz },
 
             WatInstruction::StructNew(type_name) => {
-                quote! { wazap_ast::WatInstruction::StructNew(#type_name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::StructNew(#type_name.to_string()) }
             }
             WatInstruction::StructGet(type_name, field_name) => {
-                quote! { wazap_ast::WatInstruction::StructGet(#type_name.to_string(), #field_name.to_string() ) }
+                quote! { tarnik_ast::WatInstruction::StructGet(#type_name.to_string(), #field_name.to_string() ) }
             }
             WatInstruction::StructSet(type_name, field_name) => {
-                quote! { wazap_ast::WatInstruction::StructSet(#type_name.to_string(), #field_name.to_string() ) }
+                quote! { tarnik_ast::WatInstruction::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
             WatInstruction::ArrayNew(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::ArrayNew(_) ")
@@ -1217,7 +1217,7 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::Type(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Type(_) ")
             }
-            WatInstruction::Return => quote! { wazap_ast::WatInstruction::Return },
+            WatInstruction::Return => quote! { tarnik_ast::WatInstruction::Return },
             WatInstruction::ReturnCall(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::ReturnCall(_) ")
             }
@@ -1227,7 +1227,7 @@ impl ToTokens for OurWatInstruction {
             } => {
                 let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
                 quote! {
-                    wazap_ast::WatInstruction::block(#label, vec![#(#instructions),*])
+                    tarnik_ast::WatInstruction::block(#label, vec![#(#instructions),*])
                 }
             }
             WatInstruction::Loop {
@@ -1236,7 +1236,7 @@ impl ToTokens for OurWatInstruction {
             } => {
                 let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
                 quote! {
-                    wazap_ast::WatInstruction::r#loop(#label, vec![#(#instructions),*])
+                    tarnik_ast::WatInstruction::r#loop(#label, vec![#(#instructions),*])
                 }
             }
             WatInstruction::If { then, r#else } => {
@@ -1249,14 +1249,14 @@ impl ToTokens for OurWatInstruction {
                 };
 
                 quote! {
-                    wazap_ast::WatInstruction::If {then: vec![#(#then_instructions),*], r#else: #else_code }
+                    tarnik_ast::WatInstruction::If {then: vec![#(#then_instructions),*], r#else: #else_code }
                 }
             }
             WatInstruction::BrIf(label) => {
-                quote! { wazap_ast::WatInstruction::br_if(#label) }
+                quote! { tarnik_ast::WatInstruction::br_if(#label) }
             }
             WatInstruction::Br(label) => {
-                quote! { wazap_ast::WatInstruction::br(#label) }
+                quote! { tarnik_ast::WatInstruction::br(#label) }
             }
             WatInstruction::Empty => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Empty ")
@@ -1271,13 +1271,13 @@ impl ToTokens for OurWatInstruction {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Drop ")
             }
             WatInstruction::LocalTee(name) => {
-                quote! { wazap_ast::WatInstruction::LocalTee(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::LocalTee(#name.to_string()) }
             }
             WatInstruction::RefI31 => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
             }
             WatInstruction::Throw(label) => {
-                quote! { wazap_ast::WatInstruction::Throw(#label.to_string()) }
+                quote! { tarnik_ast::WatInstruction::Throw(#label.to_string()) }
             }
             WatInstruction::Try { .. } => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Try ")
@@ -1288,33 +1288,33 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::CatchAll(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::CatchAll(_) ")
             }
-            WatInstruction::I32Add => quote! { wazap_ast::WatInstruction::I32Add },
-            WatInstruction::I64Add => quote! { wazap_ast::WatInstruction::I64Add },
-            WatInstruction::F32Add => quote! { wazap_ast::WatInstruction::F32Add },
-            WatInstruction::F64Add => quote! { wazap_ast::WatInstruction::F64Add },
-            WatInstruction::I32GeS => quote! { wazap_ast::WatInstruction::I32GeS },
-            WatInstruction::ArrayLen => quote! { wazap_ast::WatInstruction::ArrayLen },
+            WatInstruction::I32Add => quote! { tarnik_ast::WatInstruction::I32Add },
+            WatInstruction::I64Add => quote! { tarnik_ast::WatInstruction::I64Add },
+            WatInstruction::F32Add => quote! { tarnik_ast::WatInstruction::F32Add },
+            WatInstruction::F64Add => quote! { tarnik_ast::WatInstruction::F64Add },
+            WatInstruction::I32GeS => quote! { tarnik_ast::WatInstruction::I32GeS },
+            WatInstruction::ArrayLen => quote! { tarnik_ast::WatInstruction::ArrayLen },
             WatInstruction::ArrayGet(name) => {
-                quote! { wazap_ast::WatInstruction::ArrayGet(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::ArrayGet(#name.to_string()) }
             }
             WatInstruction::ArrayGetU(name) => {
-                quote! { wazap_ast::WatInstruction::ArrayGetU(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::ArrayGetU(#name.to_string()) }
             }
             WatInstruction::ArraySet(name) => {
-                quote! { wazap_ast::WatInstruction::ArraySet(#name.to_string()) }
+                quote! { tarnik_ast::WatInstruction::ArraySet(#name.to_string()) }
             }
             WatInstruction::ArrayNewFixed(typeidx, n) => {
-                quote! { wazap_ast::WatInstruction::ArrayNewFixed(#typeidx.to_string(), #n) }
+                quote! { tarnik_ast::WatInstruction::ArrayNewFixed(#typeidx.to_string(), #n) }
             }
-            WatInstruction::I32Eq => quote! { wazap_ast::WatInstruction::I32Eq },
-            WatInstruction::I64Eq => quote! { wazap_ast::WatInstruction::I64Eq },
-            WatInstruction::F32Eq => quote! { wazap_ast::WatInstruction::F32Eq },
-            WatInstruction::F64Eq => quote! { wazap_ast::WatInstruction::F64Eq },
-            WatInstruction::I64ExtendI32S => quote! { wazap_ast::WatInstruction::I64ExtendI32S },
-            WatInstruction::I32WrapI64 => quote! { wazap_ast::WatInstruction::I32WrapI64 },
-            WatInstruction::I31GetS => quote! { wazap_ast::WatInstruction::I31GetS },
-            WatInstruction::F64PromoteF32 => quote! { wazap_ast::WatInstruction::F64PromoteF32 },
-            WatInstruction::F32DemoteF64 => quote! { wazap_ast::WatInstruction::F32DemoteF64 },
+            WatInstruction::I32Eq => quote! { tarnik_ast::WatInstruction::I32Eq },
+            WatInstruction::I64Eq => quote! { tarnik_ast::WatInstruction::I64Eq },
+            WatInstruction::F32Eq => quote! { tarnik_ast::WatInstruction::F32Eq },
+            WatInstruction::F64Eq => quote! { tarnik_ast::WatInstruction::F64Eq },
+            WatInstruction::I64ExtendI32S => quote! { tarnik_ast::WatInstruction::I64ExtendI32S },
+            WatInstruction::I32WrapI64 => quote! { tarnik_ast::WatInstruction::I32WrapI64 },
+            WatInstruction::I31GetS => quote! { tarnik_ast::WatInstruction::I31GetS },
+            WatInstruction::F64PromoteF32 => quote! { tarnik_ast::WatInstruction::F64PromoteF32 },
+            WatInstruction::F32DemoteF64 => quote! { tarnik_ast::WatInstruction::F32DemoteF64 },
         };
         tokens.extend(tokens_str);
     }
@@ -1343,7 +1343,7 @@ impl ToTokens for OurWatFunction {
         });
 
         tokens.extend(quote! {
-            let mut function = wazap_ast::WatFunction::new(#name);
+            let mut function = tarnik_ast::WatFunction::new(#name);
 
             #(#params);*;
             #(#locals);*;
@@ -1408,7 +1408,7 @@ fn translate_type(ty: &Type) -> Option<WasmType> {
 
             match (name.as_str(), ty) {
                 ("Nullable", Some(WasmType::Ref(ty, _))) => {
-                    Some(WasmType::Ref(ty, wazap_ast::Nullable::True))
+                    Some(WasmType::Ref(ty, tarnik_ast::Nullable::True))
                 }
                 ("Nullable", Some(_)) => {
                     unimplemented!("Only ref types are nullable")
@@ -1559,7 +1559,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
 
     let output = quote! {
         {
-            let mut module = wazap_ast::WatModule::new();
+            let mut module = tarnik_ast::WatModule::new();
 
             #(#data)*
 

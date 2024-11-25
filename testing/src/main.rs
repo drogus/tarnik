@@ -1,5 +1,5 @@
-use wazap_ast::{Signature, WasmType, WatModule};
-use wazap_generator::wasm;
+use tarnik::wasm;
+use tarnik_ast::{Signature, WasmType, WatModule};
 
 fn main() {
     let mut module: WatModule = wasm! {

@@ -297,6 +297,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "tarnik"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "convert_case",
+ "indexmap",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn",
+ "tarnik-ast",
+]
+
+[[package]]
+name = "tarnik-ast"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
+name = "tarnik-testing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "predicates",
+ "tarnik",
+ "tarnik-ast",
+ "tempfile",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -334,39 +367,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f200f5b12eb75f8c1ed65abd4b2db8a6e1b138a20de009dacee265a2498f3f6"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "wazap-ast"
-version = "0.1.0"
-dependencies = [
- "indexmap",
-]
-
-[[package]]
-name = "wazap-generator"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "convert_case",
- "indexmap",
- "proc-macro2",
- "quote",
- "regex",
- "syn",
- "wazap-ast",
-]
-
-[[package]]
-name = "wazap-testing"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "predicates",
- "tempfile",
- "wazap-ast",
- "wazap-generator",
 ]
 
 [[package]]
