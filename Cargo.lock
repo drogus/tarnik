@@ -307,12 +307,21 @@ dependencies = [
  "quote",
  "regex",
  "syn",
- "tarnik-ast",
+ "tarnik-ast 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "tarnik-ast"
 version = "0.1.0"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
+name = "tarnik-ast"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "413af7aefed0381fbfa26089ccfc630dbca3a7e703f22380d8a274bc8cc0a4e1"
 dependencies = [
  "indexmap",
 ]
@@ -325,7 +334,7 @@ dependencies = [
  "assert_cmd",
  "predicates",
  "tarnik",
- "tarnik-ast",
+ "tarnik-ast 0.1.0",
  "tempfile",
 ]
 
