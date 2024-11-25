@@ -281,11 +281,56 @@ fn parse_function(input: &mut ParseStream, functions: &mut Vec<Function>) -> Res
 }
 
 fn translate_binary(
+    module: &mut WatModule,
     function: &mut WatFunction,
     mut current_block: &mut Vec<WatInstruction>,
     binary: &ExprBinary,
-    ty: WasmType,
+    mut left_instructions: &mut Vec<WatInstruction>,
+    mut right_instructions: &mut Vec<WatInstruction>,
 ) {
+    let left_ty = get_type(module, function, left_instructions);
+    let right_ty = get_type(module, function, right_instructions);
+
+    // negoatiate type to use for the binary operation
+    let mut ty = match (&left_ty, &right_ty) {
+        (Some(l), Some(r)) if WasmType::compatible_numeric_types(l, r) => {
+            WasmType::broader_numeric_type(l, r)
+        }
+        (Some(l), Some(r)) if l == r => l.clone(),
+        (None, None) => panic!("Types must be known for a binary operation"),
+        (l, r) => panic!("Types need to match for a binary operation. Left: {l:?}, Right: {r:?}"),
+    };
+
+    // if the negotiated type is I31Ref or I8, we have to convert it to I32 anyway
+    if ty == WasmType::I31Ref || ty == WasmType::I8 {
+        ty = WasmType::I32;
+    }
+
+    // at this point left_ty and right_ty have to be known, so we can safely unwrap()
+
+    let mut left_ty = left_ty.unwrap();
+    // i8 is valid only in arrays, getting it out results in I32
+    if left_ty == WasmType::I8 {
+        left_ty = WasmType::I32;
+    }
+    if left_ty != ty {
+        // the type is different than negoatiated type, so add conversion
+        left_instructions.append(&mut left_ty.convert_to_instruction(&ty));
+    }
+
+    let mut right_ty = right_ty.unwrap();
+    // i8 is valid only in arrays, getting it out results in I32
+    if right_ty == WasmType::I8 {
+        right_ty = WasmType::I32;
+    }
+    if right_ty != ty {
+        // the type is different than negoatiated type, so add conversion
+        right_instructions.append(&mut right_ty.convert_to_instruction(&ty));
+    }
+
+    current_block.append(&mut left_instructions);
+    current_block.append(&mut right_instructions);
+
     let op = match binary.op {
         syn::BinOp::Add(_) => {
             let instruction = match ty {
@@ -314,7 +359,22 @@ fn translate_binary(
         syn::BinOp::BitOr(_) => todo!("translate_binary: syn::BinOp::BitOr(_) "),
         syn::BinOp::Shl(_) => todo!("translate_binary: syn::BinOp::Shl(_) "),
         syn::BinOp::Shr(_) => todo!("translate_binary: syn::BinOp::Shr(_) "),
-        syn::BinOp::Eq(_) => todo!("translate_binary: syn::BinOp::Eq(_) "),
+        syn::BinOp::Eq(_) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Eq,
+                WasmType::I64 => WatInstruction::I64Eq,
+                WasmType::F32 => WatInstruction::F32Eq,
+                WasmType::F64 => WatInstruction::F64Eq,
+                WasmType::I8 => WatInstruction::I32Eq,
+                WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
+                WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
+                WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
+                WasmType::Array { mutable, ty } => todo!("translate_binary: WasmType::Array(_) "),
+                WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
+            };
+
+            current_block.push(instruction);
+        }
         syn::BinOp::Lt(_) => todo!("translate_binary: syn::BinOp::Lt(_) "),
         syn::BinOp::Le(_) => todo!("translate_binary: syn::BinOp::Le(_) "),
         syn::BinOp::Ne(_) => todo!("translate_binary: syn::BinOp::Ne(_) "),
@@ -394,7 +454,7 @@ fn get_type(
         WatInstruction::Identifier(_) => todo!("get_type: WatInstruction::Identifier(_) "),
         WatInstruction::Drop => todo!("get_type: WatInstruction::Drop "),
         WatInstruction::LocalTee(_) => todo!("get_type: WatInstruction::LocalTee(_) "),
-        WatInstruction::RefI31(_) => todo!("get_type: WatInstruction::RefI31(_) "),
+        WatInstruction::RefI31 => WasmType::I31Ref,
         WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
         WatInstruction::Try {
             try_block,
@@ -410,10 +470,20 @@ fn get_type(
         WatInstruction::I32GeS => WasmType::I32,
         WatInstruction::ArrayLen => WasmType::I32,
         WatInstruction::ArrayGet(name) => get_element_type(module, function, name).unwrap(),
+        WatInstruction::ArrayGetU(name) => WasmType::I32,
         WatInstruction::ArraySet(name) => get_element_type(module, function, name).unwrap(),
         WatInstruction::ArrayNewFixed(typeidx, n) => {
             todo!("get_type: WatInstruction::NewFixed")
         }
+        WatInstruction::I32Eq => WasmType::I32,
+        WatInstruction::I64Eq => WasmType::I32,
+        WatInstruction::F32Eq => WasmType::I32,
+        WatInstruction::F64Eq => WasmType::I32,
+        WatInstruction::I64ExtendI32S => WasmType::I64,
+        WatInstruction::I32WrapI64 => WasmType::I32,
+        WatInstruction::I31GetS => WasmType::I32,
+        WatInstruction::F64PromoteF32 => WasmType::F64,
+        WatInstruction::F32DemoteF64 => WasmType::F32,
     })
 }
 
@@ -572,14 +642,18 @@ fn translate_for_loop(
     } else {
         panic!("For loop's target has to be an array type");
     }
-    function.add_local_exact(
-        &var_name,
-        get_element_type(module, function, &array_type).unwrap(),
-    );
+
+    let element_type = get_element_type(module, function, &array_type).unwrap();
+
+    function.add_local_exact(&var_name, element_type.clone());
 
     instructions.push(WatInstruction::local_get(&for_target_local));
     instructions.push(WatInstruction::local_get(&i_local));
-    instructions.push(WatInstruction::array_get(&array_type));
+    if element_type == WasmType::I8 {
+        instructions.push(WatInstruction::array_get_u(&array_type));
+    } else {
+        instructions.push(WatInstruction::array_get(&array_type));
+    }
     instructions.push(WatInstruction::local_set(&var_name));
 
     //   (array.get $PollablesArray (global.get $pollables) (local.get $i))
@@ -609,7 +683,7 @@ fn translate_lit(
     mut function: &mut WatFunction,
     mut current_block: &mut Vec<WatInstruction>,
     lit: &syn::Lit,
-    ty: &WasmType,
+    ty: Option<&WasmType>,
 ) {
     let mut instr = match lit {
         syn::Lit::Str(lit_str) => lit_str
@@ -624,15 +698,19 @@ fn translate_lit(
         syn::Lit::Char(lit_char) => {
             vec![WatInstruction::I32Const(lit_char.value() as i32)]
         }
-        syn::Lit::Int(lit_int) => match ty {
-            WasmType::I32 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
-            WasmType::I64 => vec![WatInstruction::I64Const(lit_int.base10_parse().unwrap())],
-            WasmType::F32 => vec![WatInstruction::F32Const(lit_int.base10_parse().unwrap())],
-            WasmType::F64 => vec![WatInstruction::F64Const(lit_int.base10_parse().unwrap())],
-            WasmType::I8 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
-            WasmType::I31Ref => todo!("i31ref literal"),
-            t => todo!("translate int lteral: {t:?}"),
-        },
+        syn::Lit::Int(lit_int) => {
+            // default to i32 if the type is not known
+            let ty = ty.unwrap_or(&WasmType::I32);
+            match ty {
+                WasmType::I32 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
+                WasmType::I64 => vec![WatInstruction::I64Const(lit_int.base10_parse().unwrap())],
+                WasmType::F32 => vec![WatInstruction::F32Const(lit_int.base10_parse().unwrap())],
+                WasmType::F64 => vec![WatInstruction::F64Const(lit_int.base10_parse().unwrap())],
+                WasmType::I8 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
+                WasmType::I31Ref => todo!("i31ref literal"),
+                t => todo!("translate int lteral: {t:?}"),
+            }
+        }
         syn::Lit::Float(_) => todo!("translate_lit: syn::Lit::Float(_) "),
         syn::Lit::Bool(_) => todo!("translate_lit: syn::Lit::Bool(_) "),
         syn::Lit::Verbatim(_) => todo!("translate_lit: syn::Lit::Verbatim(_) "),
@@ -775,28 +853,35 @@ fn translate_expression(
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
+            let mut left_instructions = Vec::new();
+            let mut right_instructions = Vec::new();
             translate_expression(
                 module,
                 function,
-                current_block,
+                &mut left_instructions,
                 binary.left.deref(),
                 None,
                 None,
             );
-            let left_ty = get_type(module, function, current_block);
             translate_expression(
                 module,
                 function,
-                current_block,
+                &mut right_instructions,
                 binary.right.deref(),
                 None,
                 None,
             );
-            let right_ty = get_type(module, function, current_block);
 
             // TODO: handle casts and/or error handling
 
-            translate_binary(function, current_block, binary, left_ty.unwrap());
+            translate_binary(
+                module,
+                function,
+                current_block,
+                binary,
+                &mut left_instructions,
+                &mut right_instructions,
+            );
         }
         Expr::Block(_) => todo!("translate_expression: Expr::Block(_) "),
         Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
@@ -835,7 +920,6 @@ fn translate_expression(
         }
         Expr::Group(_) => todo!("translate_expression: Expr::Group(_) "),
         Expr::If(if_expr) => {
-            println!("if_expr.cond {:#?}", if_expr.cond);
             translate_expression(
                 module,
                 function,
@@ -878,7 +962,13 @@ fn translate_expression(
                     Some(&WasmType::I32),
                 );
                 let array_type = get_array_type(module, function, &array_name).unwrap();
-                current_block.push(WatInstruction::array_get(array_type));
+
+                let element_type = get_element_type(module, function, &array_type).unwrap();
+                if element_type == WasmType::I8 {
+                    current_block.push(WatInstruction::array_get_u(array_type));
+                } else {
+                    current_block.push(WatInstruction::array_get(array_type));
+                }
             } else {
                 // TODO: this should be tied to the code line
                 panic!("Only calling functions by path is supported at the moment");
@@ -886,12 +976,7 @@ fn translate_expression(
         }
         Expr::Infer(_) => todo!("translate_expression: Expr::Infer(_) "),
         Expr::Let(_) => todo!("translate_expression: Expr::Let(_) "),
-        Expr::Lit(expr_lit) => {
-            let ty = ty
-                .ok_or(anyhow!("Type needs to be known for a literal"))
-                .unwrap();
-            translate_lit(module, function, current_block, &expr_lit.lit, ty)
-        }
+        Expr::Lit(expr_lit) => translate_lit(module, function, current_block, &expr_lit.lit, ty),
         Expr::Loop(_) => todo!("translate_expression: Expr::Loop(_) "),
         Expr::Macro(_) => todo!("translate_expression: Expr::Macro(_) "),
         Expr::Match(_) => todo!("translate_expression: Expr::Match(_) "),
@@ -1079,7 +1164,17 @@ impl ToTokens for OurWatInstruction {
                 }
             }
             WatInstruction::If { then, r#else } => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::If ")
+                let then_instructions = then.iter().map(|i| OurWatInstruction(i.clone()));
+                let else_code = if let Some(r#else) = r#else {
+                    let else_instructions = r#else.iter().map(|i| OurWatInstruction(i.clone()));
+                    quote! { vec![#(#else_instructions),*] }
+                } else {
+                    quote! { None }
+                };
+
+                quote! {
+                    wazap_ast::WatInstruction::If {then: vec![#(#then_instructions),*], r#else: #else_code }
+                }
             }
             WatInstruction::BrIf(label) => {
                 quote! { wazap_ast::WatInstruction::br_if(#label) }
@@ -1102,7 +1197,7 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::LocalTee(name) => {
                 quote! { wazap_ast::WatInstruction::LocalTee(#name.to_string()) }
             }
-            WatInstruction::RefI31(_) => {
+            WatInstruction::RefI31 => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
             }
             WatInstruction::Throw(_) => {
@@ -1128,12 +1223,24 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::ArrayGet(name) => {
                 quote! { wazap_ast::WatInstruction::ArrayGet(#name.to_string()) }
             }
+            WatInstruction::ArrayGetU(name) => {
+                quote! { wazap_ast::WatInstruction::ArrayGetU(#name.to_string()) }
+            }
             WatInstruction::ArraySet(name) => {
                 quote! { wazap_ast::WatInstruction::ArraySet(#name.to_string()) }
             }
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 quote! { wazap_ast::WatInstruction::ArrayNewFixed(#typeidx.to_string(), #n) }
             }
+            WatInstruction::I32Eq => quote! { wazap_ast::WatInstruction::I32Eq },
+            WatInstruction::I64Eq => quote! { wazap_ast::WatInstruction::I64Eq },
+            WatInstruction::F32Eq => quote! { wazap_ast::WatInstruction::F32Eq },
+            WatInstruction::F64Eq => quote! { wazap_ast::WatInstruction::F64Eq },
+            WatInstruction::I64ExtendI32S => quote! { wazap_ast::WatInstruction::I64ExtendI32S },
+            WatInstruction::I32WrapI64 => quote! { wazap_ast::WatInstruction::I32WrapI64 },
+            WatInstruction::I31GetS => quote! { wazap_ast::WatInstruction::I31GetS },
+            WatInstruction::F64PromoteF32 => quote! { wazap_ast::WatInstruction::F64PromoteF32 },
+            WatInstruction::F32DemoteF64 => quote! { wazap_ast::WatInstruction::F32DemoteF64 },
         };
         tokens.extend(tokens_str);
     }
@@ -1307,9 +1414,7 @@ fn translate_statement(
                 todo!("Stmt::Local(local): syn::Pat::TupleStruct(_) ")
             }
             syn::Pat::Type(pat_type) => {
-                println!("pat_type: {pat_type:#?}");
                 let (name, ty) = translate_pat_type(function, pat_type);
-                println!("init: {:#?}", local.init);
                 let ty = ty
                     .ok_or(anyhow!("Could not translate type in a local statement"))
                     .unwrap(); // type should be known at this point

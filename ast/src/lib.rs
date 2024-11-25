@@ -19,7 +19,7 @@ impl fmt::Display for Nullable {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StructField {
     pub name: Option<String>,
     pub ty: WasmType,
@@ -38,7 +38,7 @@ impl fmt::Display for StructField {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum WasmType {
     I32,
     I64,
@@ -50,6 +50,87 @@ pub enum WasmType {
     Ref(String, Nullable),
     Array { mutable: bool, ty: Box<WasmType> },
     Struct(Vec<StructField>),
+}
+
+impl WasmType {
+    pub fn is_numeric(&self) -> bool {
+        use WasmType::*;
+        matches!(self, I32 | I64 | F32 | I8 | I31Ref)
+    }
+
+    pub fn compatible_numeric_types(left: &Self, right: &Self) -> bool {
+        use WasmType::*;
+        matches!(
+            (left, right),
+            (I32, I32)
+                | (I32, I64)
+                | (I32, I8)
+                | (I32, I31Ref)
+                | (I64, I32)
+                | (I64, I64)
+                | (I64, I8)
+                | (I64, I31Ref)
+                | (I8, I32)
+                | (I8, I64)
+                | (I8, I8)
+                | (I8, I31Ref)
+                | (I31Ref, I32)
+                | (I31Ref, I64)
+                | (I31Ref, I8)
+                | (I31Ref, I31Ref)
+                | (F32, F32)
+                | (F32, F64)
+                | (F64, F32)
+                | (F64, F64)
+        )
+    }
+
+    pub fn broader_numeric_type(left: &Self, right: &Self) -> Self {
+        use WasmType::*;
+        match (left, right) {
+            (I32, I32) => I32,
+            (I32, I64) => I64,
+            (I32, I8) => I32,
+            (I32, I31Ref) => I32,
+            (I64, I32) => I64,
+            (I64, I64) => I64,
+            (I64, I8) => I64,
+            (I64, I31Ref) => I64,
+            (I8, I32) => I32,
+            (I8, I64) => I64,
+            (I8, I8) => I8,
+            (I8, I31Ref) => I31Ref,
+            (I31Ref, I32) => I32,
+            (I31Ref, I64) => I64,
+            (I31Ref, I8) => I31Ref,
+            (I31Ref, I31Ref) => I31Ref,
+            (F32, F32) => F32,
+            (F32, F64) => F64,
+            (F64, F32) => F64,
+            (F64, F64) => F64,
+            _ => panic!("Both types need to be numeric. Left: {left:?}, Right: {right:?}."),
+        }
+    }
+
+    pub fn convert_to_instruction(&self, to_type: &Self) -> Vec<WatInstruction> {
+        use WasmType::*;
+        match (self, to_type) {
+            (I32, I32) => vec![],
+            (I32, I64) => vec![WatInstruction::I64ExtendI32S],
+            (I32, I31Ref) => vec![WatInstruction::RefI31],
+            (I64, I32) => vec![WatInstruction::I32WrapI64],
+            (I64, I64) => vec![],
+            (I64, I31Ref) => vec![WatInstruction::I32WrapI64, WatInstruction::RefI31],
+            (I31Ref, I32) => vec![WatInstruction::I31GetS],
+            (I31Ref, I64) => vec![WatInstruction::I31GetS, WatInstruction::I64ExtendI32S],
+            (I31Ref, I31Ref) => vec![],
+            (F32, F32) => vec![],
+            (F32, F64) => vec![WatInstruction::F64PromoteF32],
+            (F64, F32) => vec![WatInstruction::F32DemoteF64],
+            (F64, F64) => vec![],
+            _ => panic!("Can't convert {self:?} to {to_type:?}"),
+        }
+    }
 }
 
 impl fmt::Display for WasmType {
@@ -115,15 +196,29 @@ pub enum WatInstruction {
     LocalGet(String),
     LocalSet(String),
     Call(String),
+
     I32Const(i32),
     I64Const(i64),
     F32Const(f32),
     F64Const(f64),
+
     I32Eqz,
     I64Eqz,
     F32Eqz,
     F64Eqz,
+
+    I32Eq,
+    I64Eq,
+    F32Eq,
+    F64Eq,
+
     I32GeS,
+    I64ExtendI32S,
+    I32WrapI64,
+    I31GetS,
+    F64PromoteF32,
+    F32DemoteF64,
+
     StructNew(String),
     StructGet(String, String),
     StructSet(String, String),
@@ -131,6 +226,7 @@ pub enum WatInstruction {
     ArrayNewFixed(String, u16),
     ArrayLen,
     ArrayGet(String),
+    ArrayGetU(String),
     ArraySet(String),
     RefNull(WasmType),
     Ref(String),
@@ -157,7 +253,7 @@ pub enum WatInstruction {
     Identifier(String),
     Drop,
     LocalTee(String),
-    RefI31(Box<WatInstruction>),
+    RefI31,
     Throw(String),
     Try {
         try_block: Box<WatInstruction>,
@@ -232,6 +328,10 @@ impl WatInstruction {
         Self::ArrayGet(name.into())
     }
 
+    pub fn array_get_u(name: impl Into<String>) -> Self {
+        Self::ArrayGetU(name.into())
+    }
+
     pub fn array_set(name: impl Into<String>) -> Self {
         Self::ArraySet(name.into())
     }
@@ -294,8 +394,8 @@ impl WatInstruction {
         Box::new(Self::I32Eqz)
     }
 
-    pub fn ref_i31(instruction: Box<WatInstruction>) -> Box<Self> {
-        Box::new(Self::RefI31(instruction))
+    pub fn ref_i31() -> Self {
+        Self::RefI31
     }
 
     pub fn throw(label: impl Into<String>) -> Box<Self> {
@@ -361,6 +461,7 @@ impl fmt::Display for WatInstruction {
             }
             WatInstruction::ArrayLen => write!(f, "(array.len)"),
             WatInstruction::ArrayGet(ty) => write!(f, "(array.get {ty})"),
+            WatInstruction::ArrayGetU(ty) => write!(f, "(array.get_u {ty})"),
             WatInstruction::ArraySet(ty) => write!(f, "(array.set {ty})"),
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 write!(f, "(array.new_fixed {typeidx} {n})")
@@ -421,7 +522,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::F32Eqz => write!(f, "(f32.eqz)"),
             WatInstruction::F64Eqz => write!(f, "(f64.eqz)"),
 
-            WatInstruction::RefI31(instruction) => write!(f, "(ref.i31 {instruction})"),
+            WatInstruction::RefI31 => write!(f, "(ref.i31)"),
             WatInstruction::Throw(label) => write!(f, "(throw {label})"),
             WatInstruction::Try {
                 try_block,
@@ -444,6 +545,15 @@ impl fmt::Display for WatInstruction {
             }
             WatInstruction::Catch(label, instr) => writeln!(f, "\ncatch {label}\n{instr}"),
             WatInstruction::CatchAll(instr) => writeln!(f, "\ncatch_all\n{instr}"),
+            WatInstruction::I64ExtendI32S => writeln!(f, "(i64.extend_32_s)"),
+            WatInstruction::I32WrapI64 => writeln!(f, "(i32.wrap_i64)"),
+            WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
+            WatInstruction::F64PromoteF32 => writeln!(f, "(f64.promote_f32)"),
+            WatInstruction::F32DemoteF64 => writeln!(f, "(f32.demote_f64)"),
+            WatInstruction::I32Eq => writeln!(f, "(i32.eq)"),
+            WatInstruction::I64Eq => writeln!(f, "(i64.eq)"),
+            WatInstruction::F32Eq => writeln!(f, "(f32.eq)"),
+            WatInstruction::F64Eq => writeln!(f, "(f64.eq)"),
         }
     }
 }

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 
-members = ["generator", "ast", "testing"]
+members = ["generator", "ast", "testing", "tonic-test"]
 
 [workspace.package]
 version = "0.1.0"
