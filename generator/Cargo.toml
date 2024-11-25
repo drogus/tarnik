@@ -4,9 +4,9 @@ version.workspace = true
 edition.workspace = true
 license-file = "LICENSE"
 description = "Macro for generating WASM AST"
-documentation = ""
-homepage = ""
-repository = ""
+documentation = "https://docs.rs/tarnik"
+homepage = "https://github.com/drogus/tarnik"
+repository = "https://github.com/drogus/tarnik"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
