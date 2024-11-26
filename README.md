@@ -40,6 +40,49 @@ let module = tarnik::wasm! {
 println!("{module}");
 ```
 
+In order to make the module a bit more useful, you may have to add some stuff like memory or imports.
+I plan to add APIs for that in the macro itself, but at the moment the easiest way to do that is to
+modify the module struct, like so:
+
+```rust
+let mut module: WatModule = wasm! {
+    fn run() {
+        let x: i32 = 0;
+    }
+};
+
+module.add_memory("$memory", 1);
+module.add_export("memory", "memory", "$memory");
+module.add_export("_start", "func", "$run");
+module.add_import(
+    "console",
+    "log",
+    WasmType::func(vec![WasmType::I32, WasmType::I32], None),
+);
+
+println!("{module}");
+```
+
+This will result in the following WAT program:
+
+```
+(module
+  (import "console" "log" (func (param i32) (param i32)))
+
+  (memory $memory 1)
+
+  (elem declare func $run)
+  (func $run
+    (local $x i32)
+    (i32.const 0)
+    (local.set $x)
+  )
+
+  (export "memory" (memory $memory))
+  (export "_start" (func $run))
+)
+```
+
 As this is an early version, a lot of expressions don't work correclty. I'll be
 adding more stuff in the near future. The code used in the macro is "almost Rust",
 ie. most of the syntax is taken from Rust, but it differs in some places where it made

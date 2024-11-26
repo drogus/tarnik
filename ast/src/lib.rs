@@ -145,6 +145,13 @@ impl WasmType {
             _ => panic!("Can't convert {self:?} to {to_type:?}"),
         }
     }
+
+    pub fn func(params: Vec<WasmType>, result: Option<WasmType>) -> WasmType {
+        WasmType::Func(Box::new(Signature {
+            params,
+            result: result.map(Box::new),
+        }))
+    }
 }
 
 impl fmt::Display for WasmType {
