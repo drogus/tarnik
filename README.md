@@ -15,7 +15,7 @@ development.
 ### What's up with the name?
 
 I wanted to call the project Rasp, but it was already taken on crates.io,
-so I used a Polish name, which surprisingly isn't a non-pronounceable word.
+so I used tye Polish translation, which surprisingly isn't a non-pronounceable word.
 Yes, I am lazy.
 
 ### How do I use it?
