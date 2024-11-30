@@ -13,6 +13,7 @@ fn main() {
         #[export("_start")]
         fn run() {
             let x: i32 = 0;
+            x += 1;
         }
     };
 

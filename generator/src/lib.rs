@@ -461,7 +461,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "addition can only be performed on number types",
+                        "addition can only be performed on numeric types",
                     ));
                 }
             };
@@ -478,7 +478,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "subtraction can only be performed on number types",
+                        "subtraction can only be performed on numeric types",
                     ));
                 }
             };
@@ -495,7 +495,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "multiplication can only be performed on number types",
+                        "multiplication can only be performed on numeric types",
                     ));
                 }
             };
@@ -512,7 +512,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "division can only be performed on number types",
+                        "division can only be performed on numeric types",
                     ));
                 }
             };
@@ -639,7 +639,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "less than operation can only be performed on number types",
+                        "less than operation can only be performed on numeric types",
                     ));
                 }
             };
@@ -656,7 +656,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "less then or equal operation can only be performed on number types",
+                        "less then or equal operation can only be performed on numeric types",
                     ));
                 }
             };
@@ -691,7 +691,7 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "greater than or equal operation can only be performed on number types",
+                        "greater than or equal operation can only be performed on numeric types",
                     ));
                 }
             };
@@ -708,15 +708,47 @@ fn translate_binary(
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
-                        "greater than or equal operation can only be performed on number types",
+                        "greater than or equal operation can only be performed on numeric types",
                     ));
                 }
             };
 
             current_block.push(instruction);
         }
-        syn::BinOp::AddAssign(add_assign) => {}
-        syn::BinOp::SubAssign(_) => todo!("translate_binary: syn::BinOp::SubAssign(_) "),
+        syn::BinOp::AddAssign(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Add,
+                WasmType::I64 => WatInstruction::I64Add,
+                WasmType::F32 => WatInstruction::F32Add,
+                WasmType::F64 => WatInstruction::F64Add,
+                WasmType::I8 => WatInstruction::I32Add,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "addition can only be performed on numeric types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::SubAssign(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Add,
+                WasmType::I64 => WatInstruction::I64Add,
+                WasmType::F32 => WatInstruction::F32Add,
+                WasmType::F64 => WatInstruction::F64Add,
+                WasmType::I8 => WatInstruction::I32Add,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "subtraction can only be performed on numeric types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
         syn::BinOp::MulAssign(_) => todo!("translate_binary: syn::BinOp::MulAssign(_) "),
         syn::BinOp::DivAssign(_) => todo!("translate_binary: syn::BinOp::DivAssign(_) "),
         syn::BinOp::RemAssign(_) => todo!("translate_binary: syn::BinOp::RemAssign(_) "),
@@ -1294,7 +1326,31 @@ fn translate_expression(
                 binary,
                 &mut left_instructions,
                 &mut right_instructions,
-            );
+            )?;
+
+            match binary.op {
+                syn::BinOp::AddAssign(_)
+                | syn::BinOp::SubAssign(_)
+                | syn::BinOp::MulAssign(_)
+                | syn::BinOp::DivAssign(_)
+                | syn::BinOp::RemAssign(_)
+                | syn::BinOp::BitXorAssign(_)
+                | syn::BinOp::BitAndAssign(_)
+                | syn::BinOp::BitOrAssign(_)
+                | syn::BinOp::ShlAssign(_)
+                | syn::BinOp::ShrAssign(_) => {
+                    if let Expr::Path(path_expr) = binary.left.deref() {
+                        let name = path_expr.path.segments[0].ident.to_string();
+                        current_block.push(WatInstruction::local_set(name));
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            binary,
+                            "left side of the assign statement has to be a path",
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
         Expr::Block(expr_block) => {
             for stmt in &expr_block.block.stmts {
