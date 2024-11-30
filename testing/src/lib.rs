@@ -8,6 +8,25 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_arithmetic_operations() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            fn run() {
+                let x: i32 = 0;
+                assert(x + 1 == 1, "0 + 1 should equal 1");
+                assert(x - 1 == -1, "0 - 1 should equal -1");
+                x = 4;
+                assert(x * 4 == 16, "4 * 4 should equal 16");
+                assert(x / 2 == 2, "4 / 1 should equal 2");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_array_operations() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type Array = [mut i32];

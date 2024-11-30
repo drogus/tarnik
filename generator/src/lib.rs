@@ -7,7 +7,7 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     token::{self, Semi},
-    Attribute, Expr, ExprBinary, ExprForLoop, Lit, Meta, Pat, PatType, Type,
+    Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Meta, Pat, PatType, Type,
 };
 
 extern crate proc_macro;
@@ -395,6 +395,62 @@ fn parse_function<'f>(
     Ok(functions.last().unwrap())
 }
 
+fn translate_unary(
+    module: &mut WatModule,
+    function: &mut WatFunction,
+    current_block: &mut Vec<WatInstruction>,
+    expr: &Expr,
+    expr_unary: &ExprUnary,
+    ty: Option<&WasmType>,
+) -> Result<()> {
+    match expr_unary.op {
+        syn::UnOp::Deref(_) => {
+            return Err(syn::Error::new_spanned(
+                expr,
+                "Dereferencing is not supported",
+            ))
+        }
+        syn::UnOp::Not(_) => todo!(),
+        syn::UnOp::Neg(_) => {
+            translate_expression(
+                module,
+                function,
+                current_block,
+                expr_unary.expr.deref(),
+                None,
+                None,
+            )?;
+
+            // let's default to i32 for now
+            // TODO: revisit this, maybe it should only default for int literals?
+            let ty = match ty {
+                Some(ty) => ty,
+                None => &WasmType::I32,
+            };
+
+            let mut instructions = match ty {
+                // There is no neg instruction for integer types, so for integer types we multiply
+                // by -1
+                WasmType::I32 => vec![WatInstruction::I32Const(-1), WatInstruction::I32Mul],
+                WasmType::I64 => vec![WatInstruction::I64Const(-1), WatInstruction::I64Mul],
+                WasmType::F32 => vec![WatInstruction::F32Neg],
+                WasmType::F64 => vec![WatInstruction::F64Neg],
+                WasmType::I8 => vec![WatInstruction::i32_const(-1), WatInstruction::I32Mul],
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        expr_unary,
+                        "negation can be used only for numeric types",
+                    ));
+                }
+            };
+            current_block.append(&mut instructions);
+        }
+        _ => return Err(syn::Error::new_spanned(expr, "Operation not supported")),
+    }
+
+    Ok(())
+}
+
 fn translate_binary(
     module: &mut WatModule,
     function: &mut WatFunction,
@@ -504,11 +560,11 @@ fn translate_binary(
         }
         syn::BinOp::Div(op) => {
             let instruction = match ty {
-                WasmType::I32 => WatInstruction::I32Div,
-                WasmType::I64 => WatInstruction::I64Div,
+                WasmType::I32 => WatInstruction::I32DivS,
+                WasmType::I64 => WatInstruction::I64DivS,
                 WasmType::F32 => WatInstruction::F32Div,
                 WasmType::F64 => WatInstruction::F64Div,
-                WasmType::I8 => WatInstruction::I32Div,
+                WasmType::I8 => WatInstruction::I32DivS,
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
@@ -859,8 +915,10 @@ fn get_type(
             WatInstruction::I64Mul => Some(WasmType::I64),
             WatInstruction::F32Mul => Some(WasmType::F32),
             WatInstruction::F64Mul => Some(WasmType::F64),
-            WatInstruction::I32Div => Some(WasmType::I32),
-            WatInstruction::I64Div => Some(WasmType::I64),
+            WatInstruction::I32DivS => Some(WasmType::I32),
+            WatInstruction::I64DivS => Some(WasmType::I64),
+            WatInstruction::I32DivU => Some(WasmType::I32),
+            WatInstruction::I64DivU => Some(WasmType::I64),
             WatInstruction::F32Div => Some(WasmType::F32),
             WatInstruction::F64Div => Some(WasmType::F64),
             WatInstruction::I32RemS => Some(WasmType::I32),
@@ -908,6 +966,8 @@ fn get_type(
             WatInstruction::I64ShrS => Some(WasmType::I64),
             WatInstruction::I32ShrU => Some(WasmType::I32),
             WatInstruction::I64ShrU => Some(WasmType::I64),
+            WatInstruction::F32Neg => Some(WasmType::F32),
+            WatInstruction::F64Neg => Some(WasmType::F64),
         })
         .flatten()
 }
@@ -1297,7 +1357,6 @@ fn translate_expression(
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
-            println!("BINARY: {binary:#?}");
             let mut left_instructions = Vec::new();
             let mut right_instructions = Vec::new();
             translate_expression(
@@ -1538,7 +1597,9 @@ fn translate_expression(
         Expr::Try(_) => todo!("translate_expression: Expr::Try(_) "),
         Expr::TryBlock(_) => todo!("translate_expression: Expr::TryBlock(_) "),
         Expr::Tuple(_) => todo!("translate_expression: Expr::Tuple(_) "),
-        Expr::Unary(_) => todo!("translate_expression: Expr::Unary(_) "),
+        Expr::Unary(expr_unary) => {
+            translate_unary(module, function, current_block, expr, expr_unary, ty)?;
+        }
         Expr::Unsafe(_) => todo!("translate_expression: Expr::Unsafe(_) "),
         Expr::Verbatim(_) => todo!("translate_expression: Expr::Verbatim(_) "),
         Expr::While(_) => todo!("translate_expression: Expr::While(_) "),
@@ -1801,8 +1862,10 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::I64Mul => quote! { tarnik_ast::WatInstruction::I64Mul },
             WatInstruction::F32Mul => quote! { tarnik_ast::WatInstruction::F32Mul },
             WatInstruction::F64Mul => quote! { tarnik_ast::WatInstruction::F64Mul },
-            WatInstruction::I32Div => quote! { tarnik_ast::WatInstruction::I32Div },
-            WatInstruction::I64Div => quote! { tarnik_ast::WatInstruction::I64Div },
+            WatInstruction::I32DivS => quote! { tarnik_ast::WatInstruction::I32DivS },
+            WatInstruction::I64DivS => quote! { tarnik_ast::WatInstruction::I64DivS },
+            WatInstruction::I32DivU => quote! { tarnik_ast::WatInstruction::I32DivU },
+            WatInstruction::I64DivU => quote! { tarnik_ast::WatInstruction::I64DivU },
             WatInstruction::F32Div => quote! { tarnik_ast::WatInstruction::F32Div },
             WatInstruction::F64Div => quote! { tarnik_ast::WatInstruction::F64Div },
             WatInstruction::I32RemS => quote! { tarnik_ast::WatInstruction::I32RemS },
@@ -1850,6 +1913,8 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::I64ShrS => quote! { tarnik_ast::WatInstruction::I64ShrS},
             WatInstruction::I32ShrU => quote! { tarnik_ast::WatInstruction::I32ShrU},
             WatInstruction::I64ShrU => quote! { tarnik_ast::WatInstruction::I64ShrU},
+            WatInstruction::F32Neg => quote! { tarnik_ast::WatInstruction::F32Neg },
+            WatInstruction::F64Neg => quote! { tarnik_ast::WatInstruction::F64Neg },
         };
         tokens.extend(tokens_str);
     }
@@ -2007,7 +2072,20 @@ fn translate_statement(
     match stmt {
         Stmt::Local(local) => match &local.pat {
             syn::Pat::Const(_) => todo!("Stmt::Local(local): syn::Pat::Const(_) "),
-            syn::Pat::Ident(_) => todo!("Stmt::Local(local): syn::Pat::Ident(_) "),
+            syn::Pat::Ident(pat_ident) => {
+                let name = pat_ident.ident.to_string();
+                if let Some(init) = &local.init {
+                    translate_expression(
+                        module,
+                        function,
+                        instructions,
+                        &init.expr,
+                        Some(Semi::default()),
+                        Some(&get_local_type(module, function, &name).unwrap()),
+                    )?;
+                    instructions.push(WatInstruction::local_set(name));
+                }
+            }
             syn::Pat::Lit(_) => todo!("Stmt::Local(local): syn::Pat::Lit(_) "),
             syn::Pat::Macro(_) => todo!("Stmt::Local(local): syn::Pat::Macro(_) "),
             syn::Pat::Or(_) => todo!("Stmt::Local(local): syn::Pat::Or(_) "),

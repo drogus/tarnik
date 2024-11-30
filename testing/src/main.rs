@@ -3,17 +3,13 @@ use tarnik_ast::{Signature, WasmType, WatModule};
 
 fn main() {
     let mut module: WatModule = wasm! {
-        #[export("foo")]
-        struct Foo {}
-
-        // define a memory named $memory with a page size of 1
         #[export("memory")]
         memory!("memory", 1);
 
         #[export("_start")]
         fn run() {
             let x: i32 = 0;
-            x += 1;
+            x = -1;
         }
     };
 

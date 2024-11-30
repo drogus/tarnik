@@ -251,6 +251,9 @@ pub enum WatInstruction {
     F32Const(f32),
     F64Const(f64),
 
+    F32Neg,
+    F64Neg,
+
     I32Eqz,
     I64Eqz,
     F32Eqz,
@@ -281,8 +284,10 @@ pub enum WatInstruction {
     F32Mul,
     F64Mul,
 
-    I32Div,
-    I64Div,
+    I32DivS,
+    I64DivS,
+    I32DivU,
+    I64DivU,
     F32Div,
     F64Div,
 
@@ -555,6 +560,9 @@ impl WatInstruction {
 impl fmt::Display for WatInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            WatInstruction::F32Neg => write!(f, "(f32.neg)"),
+            WatInstruction::F64Neg => write!(f, "(f64.neg)"),
+
             WatInstruction::I32Add => write!(f, "(i32.add)"),
             WatInstruction::I64Add => write!(f, "(i64.add)"),
             WatInstruction::F32Add => write!(f, "(f32.add)"),
@@ -570,8 +578,10 @@ impl fmt::Display for WatInstruction {
             WatInstruction::F32Mul => write!(f, "(f32.mul)"),
             WatInstruction::F64Mul => write!(f, "(f64.mul)"),
 
-            WatInstruction::I32Div => write!(f, "(i32.div)"),
-            WatInstruction::I64Div => write!(f, "(i64.div)"),
+            WatInstruction::I32DivS => write!(f, "(i32.div_s)"),
+            WatInstruction::I64DivS => write!(f, "(i64.div_s)"),
+            WatInstruction::I32DivU => write!(f, "(i32.div_u)"),
+            WatInstruction::I64DivU => write!(f, "(i64.div_u)"),
             WatInstruction::F32Div => write!(f, "(f32.div)"),
             WatInstruction::F64Div => write!(f, "(f64.div)"),
 
