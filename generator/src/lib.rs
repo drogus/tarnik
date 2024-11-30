@@ -5,8 +5,9 @@ use std::ops::Deref;
 use syn::{
     bracketed,
     parse::{Parse, ParseStream},
+    punctuated::Punctuated,
     token::{self, Semi},
-    Expr, ExprBinary, ExprForLoop, Pat, PatType, Type,
+    Attribute, Expr, ExprBinary, ExprForLoop, Lit, Meta, Pat, PatType, Type,
 };
 
 extern crate proc_macro;
@@ -14,7 +15,7 @@ extern crate proc_macro2;
 extern crate quote;
 extern crate syn;
 
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Literal, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
@@ -46,22 +47,155 @@ impl Parse for GlobalScope {
     fn parse(mut input: ParseStream) -> Result<Self> {
         let mut functions = Vec::new();
         let mut types = IndexMap::new();
+        let mut export_next: Option<String> = None;
+
+        let mut module = WatModule::new();
 
         while !input.is_empty() {
             if input.peek(Token![fn]) {
-                parse_function(&mut input, &mut functions)?;
+                let function = parse_function(&mut input, &mut functions)?;
+                if let Some(export_name) = export_next {
+                    module.add_export(export_name, "func", format!("${}", function.name));
+                    export_next = None;
+                }
             } else if input.peek(Token![type]) {
                 let (name, ty) = parse_type_def(&mut input)?;
-                types.insert(name, ty);
+                types.insert(name.clone(), ty);
+                if let Some(export_name) = export_next {
+                    module.add_export(export_name, "type", format!("${}", name));
+                    export_next = None;
+                }
             } else if input.peek(Token![struct]) {
                 let (name, ty) = parse_struct(&mut input)?;
                 types.insert(format!("${name}"), ty);
+                if let Some(export_name) = export_next {
+                    module.add_export(export_name, "type", format!("${}", name));
+                    export_next = None;
+                }
+            } else if input.peek(Token![#]) {
+                // TODO: extract to a method
+                let attrs = input.call(Attribute::parse_outer)?;
+                if attrs.len() > 1 {
+                    return Err(syn::Error::new_spanned(
+                        attrs[1].clone(),
+                        "Only one macro attribute per item is supported at the moment",
+                    ));
+                }
+
+                let ident = &attrs[0].meta.path().segments[0].ident;
+                let name = ident.to_string();
+                if name == "export" {
+                    if let Meta::List(list) = &attrs[0].meta {
+                        let tokens = &list.tokens;
+                        let str: Literal = syn::parse2(tokens.clone())?;
+                        // TODO: is there a better way to extract it?
+                        export_next = Some(str.to_string().trim_matches('"').to_string());
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &attrs[0].meta,
+                            "Export macro accepts only a string literal as an argument",
+                        ));
+                    }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "Only export macro is supported at the moment",
+                    ));
+                }
+            } else if input.peek(syn::Ident) && input.peek2(Token![!]) {
+                let mcro: syn::Macro = input.parse()?;
+                let macro_name = &mcro.path.segments[0].ident.to_string();
+                if macro_name == "memory" {
+                    let expressions = ::syn::parse::Parser::parse2(
+                        Punctuated::<Expr, Token![,]>::parse_terminated,
+                        mcro.tokens.clone(),
+                    )?;
+
+                    if expressions.len() < 2 || expressions.len() > 3 {
+                        return Err(syn::Error::new_spanned(
+                            mcro,
+                            "memory!() must have 2 or 3 arguments: name, size and optional max_size",
+                        ));
+                    }
+
+                    let name_expr = &expressions[0];
+                    let size_expr = &expressions[1];
+                    let max_size_expr = &expressions.get(2);
+
+                    let name = if let Expr::Lit(expr_lit) = name_expr {
+                        if let Lit::Str(str) = &expr_lit.lit {
+                            str.value()
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                mcro,
+                                "first argument to memory!() has to be a string literal",
+                            ));
+                        }
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            mcro,
+                            "first argument to memory!() has to be a string literal",
+                        ));
+                    };
+
+                    let size: i32 = if let Expr::Lit(expr_lit) = size_expr {
+                        if let Lit::Int(int) = &expr_lit.lit {
+                            int.base10_parse()?
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                mcro,
+                                "Second argument to memory!() has to be an integer",
+                            ));
+                        }
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            mcro,
+                            "Second argument to memory!() has to be an integer",
+                        ));
+                    };
+
+                    let max_size: Option<i32> = if let Some(max_size_expr) = max_size_expr {
+                        if let Expr::Lit(expr_lit) = name_expr {
+                            if let Lit::Int(int) = &expr_lit.lit {
+                                Some(int.base10_parse()?)
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    mcro,
+                                    "Third argument to memory!() has to be an integer",
+                                ));
+                            }
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                mcro,
+                                "Third argument to memory!() has to be an integer",
+                            ));
+                        }
+                    } else {
+                        None
+                    };
+
+                    module.add_memory(&name, size, max_size);
+                    if let Some(export_name) = export_next {
+                        module.add_export(export_name, "memory", format!("${}", name));
+                        export_next = None;
+                    }
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        macro_name,
+                        "Only memory macro is supported at the top-level at the moment",
+                    ));
+                }
+
+                if input.peek(token::Semi) {
+                    let _: token::Semi = input.parse()?;
+                }
             } else {
+                let attr = input.call(Attribute::parse_outer)?;
+                println!("attr: {attr:#?}");
+                println!("input: {input:#?}");
                 todo!("other input type")
             }
         }
-
-        let mut module = WatModule::new();
 
         for (name, ty) in types.clone() {
             module.add_type(name.clone(), ty.clone());
@@ -213,7 +347,10 @@ fn parse_type_def(input: &mut ParseStream) -> Result<(String, WasmType)> {
     Ok((format!("${ident}"), ty))
 }
 
-fn parse_function(input: &mut ParseStream, functions: &mut Vec<Function>) -> Result<()> {
+fn parse_function<'f>(
+    input: &mut ParseStream,
+    functions: &'f mut Vec<Function>,
+) -> Result<&'f Function> {
     let _: Token![fn] = input.parse()?;
     let name: Ident = input.parse()?;
 
@@ -255,7 +392,7 @@ fn parse_function(input: &mut ParseStream, functions: &mut Vec<Function>) -> Res
         body,
     });
 
-    Ok(())
+    Ok(functions.last().unwrap())
 }
 
 fn translate_binary(
@@ -269,6 +406,10 @@ fn translate_binary(
     let left_ty = get_type(module, function, left_instructions);
     let right_ty = get_type(module, function, right_instructions);
 
+    // TODO: I'm starting to think that I should just bail on anything that is of different types
+    // and require explicit conversions. It will be also much easier to document than documenting
+    // auto-cast rules
+    //
     // negoatiate type to use for the binary operation
     let mut ty = match (&left_ty, &right_ty) {
         (Some(l), Some(r)) if WasmType::compatible_numeric_types(l, r) => {
@@ -1547,6 +1688,17 @@ pub fn wasm(input: TokenStream) -> TokenStream {
                 module.tags.insert(#name.to_string(), #type_name.to_string());
             }
         });
+
+    let tags =
+        global_scope
+            .module
+            .exports
+            .into_iter()
+            .map(|(export_name, export_type, internal_name)| {
+                quote! {
+                    module.add_export(#export_name, #export_type, #internal_name);
+                }
+            });
 
     let functions = global_scope.functions.into_iter().map(|f| {
         let our = OurWatFunction(f.clone());

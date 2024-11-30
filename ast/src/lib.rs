@@ -689,7 +689,7 @@ pub struct WatModule {
     pub data: Vec<(usize, String)>,
     pub data_offset: usize,
     pub data_offsets: HashMap<String, usize>,
-    pub memories: HashMap<String, i32>,
+    pub memories: HashMap<String, (i32, Option<i32>)>,
 }
 
 impl WatModule {
@@ -739,8 +739,8 @@ impl WatModule {
         }
     }
 
-    pub fn add_memory(&mut self, label: impl Into<String>, size: i32) {
-        self.memories.insert(label.into(), size);
+    pub fn add_memory(&mut self, label: impl Into<String>, size: i32, max_size: Option<i32>) {
+        self.memories.insert(label.into(), (size, max_size));
     }
 
     pub fn add_export(
@@ -782,8 +782,13 @@ impl fmt::Display for WatModule {
         }
 
         // Memories
-        for (label, size) in &self.memories {
-            writeln!(f, "  (memory {label} {size})")?;
+        for (label, (size, max_size)) in &self.memories {
+            let max_size = if let Some(max_size) = max_size {
+                format!("{max_size}")
+            } else {
+                "".into()
+            };
+            writeln!(f, "  (memory {label} {size} {max_size})")?;
         }
 
         // Data
@@ -821,11 +826,7 @@ impl fmt::Display for WatModule {
 
         // Exports
         for (name, export_type, internal_name) in &self.exports {
-            writeln!(
-                f,
-                "  (export \"{}\" ({export_type} {}))",
-                name, internal_name
-            )?;
+            writeln!(f, "  (export \"{name}\" ({export_type} {internal_name}))",)?;
         }
 
         writeln!(f, ")")?;

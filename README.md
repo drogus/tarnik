@@ -24,8 +24,12 @@ After adding the crate to a Rust project you can do the following:
 
 ```rust
 let module = tarnik::wasm! {
+  #[export("memory")]
+  memory!("memory", 1);
+
   type String = [mut i8];
 
+  #[export("_start")]
   fn run() {
     let foo: String = "Hello world";
     foo[1] = 'a';
@@ -40,20 +44,21 @@ let module = tarnik::wasm! {
 println!("{module}");
 ```
 
-In order to make the module a bit more useful, you may have to add some stuff like memory or imports.
-I plan to add APIs for that in the macro itself, but at the moment the easiest way to do that is to
-modify the module struct, like so:
+The `wasm!` macro supports adding memory, and exporting memories, functions and types.
+Imports are not supported yet, but you can add imports by running the `add_import`
+method on the module:
 
 ```rust
 let mut module: WatModule = wasm! {
+    #[export("memory")]
+    memory!("memory", 1);
+
+    #[export("_start")]
     fn run() {
         let x: i32 = 0;
     }
 };
 
-module.add_memory("$memory", 1);
-module.add_export("memory", "memory", "$memory");
-module.add_export("_start", "func", "$run");
 module.add_import(
     "console",
     "log",

@@ -12,3 +12,4 @@ license-file = "LICENSE.md"
 
 [workspace.dependencies]
 indexmap = "2.6"
+tarnik-ast = { path = "ast", version = "0.1.0" }

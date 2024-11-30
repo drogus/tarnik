@@ -11,7 +11,13 @@ async function runWasm(wasmPath) {
   const importObject = {
     env: {
       assert_exception_tag: assertExceptionTag,
-      log: (offset, length) => {},
+    },
+    console: {
+      log: (offset, length) => {
+        const bytes = new Uint8Array(memory.buffer, offset, length);
+        const text = new TextDecoder().decode(bytes);
+        process.stdout.write(text);
+      },
     },
   };
 
@@ -21,7 +27,7 @@ async function runWasm(wasmPath) {
 
     memory = instance.exports.memory;
 
-    // Call the run function if it exists
+    // Call the _start function if it exists
     if (instance.exports._start) {
       try {
         instance.exports._start();
@@ -37,6 +43,8 @@ async function runWasm(wasmPath) {
           console.log("Unknown error thrown", e);
         }
       }
+    } else {
+      console.error("Could not find _start function");
     }
 
     return { success: true };
