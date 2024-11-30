@@ -402,7 +402,7 @@ fn translate_binary(
     binary: &ExprBinary,
     left_instructions: &mut Vec<WatInstruction>,
     right_instructions: &mut Vec<WatInstruction>,
-) {
+) -> Result<()> {
     let left_ty = get_type(module, function, left_instructions);
     let right_ty = get_type(module, function, right_instructions);
 
@@ -451,35 +451,166 @@ fn translate_binary(
     current_block.append(right_instructions);
 
     match binary.op {
-        syn::BinOp::Add(_) => {
+        syn::BinOp::Add(op) => {
             let instruction = match ty {
                 WasmType::I32 => WatInstruction::I32Add,
                 WasmType::I64 => WatInstruction::I64Add,
                 WasmType::F32 => WatInstruction::F32Add,
                 WasmType::F64 => WatInstruction::F64Add,
                 WasmType::I8 => WatInstruction::I32Add,
-                WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
-                WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
-                WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
-                WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
-                WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
-                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
-                WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "addition can only be performed on number types",
+                    ));
+                }
             };
 
             current_block.push(instruction);
         }
-        syn::BinOp::Sub(_) => todo!("translate_binary: syn::BinOp::Sub(_) "),
-        syn::BinOp::Mul(_) => todo!("translate_binary: syn::BinOp::Mul(_) "),
-        syn::BinOp::Div(_) => todo!("translate_binary: syn::BinOp::Div(_) "),
-        syn::BinOp::Rem(_) => todo!("translate_binary: syn::BinOp::Rem(_) "),
+        syn::BinOp::Sub(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Sub,
+                WasmType::I64 => WatInstruction::I64Sub,
+                WasmType::F32 => WatInstruction::F32Sub,
+                WasmType::F64 => WatInstruction::F64Sub,
+                WasmType::I8 => WatInstruction::I32Sub,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "subtraction can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Mul(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Mul,
+                WasmType::I64 => WatInstruction::I64Mul,
+                WasmType::F32 => WatInstruction::F32Mul,
+                WasmType::F64 => WatInstruction::F64Mul,
+                WasmType::I8 => WatInstruction::I32Mul,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "multiplication can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Div(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Div,
+                WasmType::I64 => WatInstruction::I64Div,
+                WasmType::F32 => WatInstruction::F32Div,
+                WasmType::F64 => WatInstruction::F64Div,
+                WasmType::I8 => WatInstruction::I32Div,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "division can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Rem(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32RemS,
+                WasmType::I64 => WatInstruction::I64RemS,
+                WasmType::I8 => WatInstruction::I32RemS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "remainder operation can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
         syn::BinOp::And(_) => todo!("translate_binary: syn::BinOp::And(_) "),
         syn::BinOp::Or(_) => todo!("translate_binary: syn::BinOp::Or(_) "),
-        syn::BinOp::BitXor(_) => todo!("translate_binary: syn::BinOp::BitXor(_) "),
-        syn::BinOp::BitAnd(_) => todo!("translate_binary: syn::BinOp::BitAnd(_) "),
-        syn::BinOp::BitOr(_) => todo!("translate_binary: syn::BinOp::BitOr(_) "),
-        syn::BinOp::Shl(_) => todo!("translate_binary: syn::BinOp::Shl(_) "),
-        syn::BinOp::Shr(_) => todo!("translate_binary: syn::BinOp::Shr(_) "),
+        syn::BinOp::BitXor(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Xor,
+                WasmType::I64 => WatInstruction::I64Xor,
+                WasmType::I8 => WatInstruction::I32Xor,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "bitwise XOR can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::BitAnd(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32And,
+                WasmType::I64 => WatInstruction::I64And,
+                WasmType::I8 => WatInstruction::I32And,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "bitwise AND can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::BitOr(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Or,
+                WasmType::I64 => WatInstruction::I64Or,
+                WasmType::I8 => WatInstruction::I32Or,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "bitwise OR can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Shl(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32ShlS,
+                WasmType::I64 => WatInstruction::I64ShlS,
+                WasmType::I8 => WatInstruction::I32ShlS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "only integers can be shifted left",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Shr(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32ShrS,
+                WasmType::I64 => WatInstruction::I64ShrS,
+                WasmType::I8 => WatInstruction::I32ShrS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "only integers can be shifted right",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
         syn::BinOp::Eq(_) => {
             let instruction = match ty {
                 WasmType::I32 => WatInstruction::I32Eq,
@@ -498,12 +629,93 @@ fn translate_binary(
 
             current_block.push(instruction);
         }
-        syn::BinOp::Lt(_) => todo!("translate_binary: syn::BinOp::Lt(_) "),
-        syn::BinOp::Le(_) => todo!("translate_binary: syn::BinOp::Le(_) "),
-        syn::BinOp::Ne(_) => todo!("translate_binary: syn::BinOp::Ne(_) "),
-        syn::BinOp::Ge(_) => todo!("translate_binary: syn::BinOp::Ge(_) "),
-        syn::BinOp::Gt(_) => todo!("translate_binary: syn::BinOp::Gt(_) "),
-        syn::BinOp::AddAssign(_) => {}
+        syn::BinOp::Lt(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32LtS,
+                WasmType::I64 => WatInstruction::I64LtS,
+                WasmType::F32 => WatInstruction::F32Lt,
+                WasmType::F64 => WatInstruction::F64Lt,
+                WasmType::I8 => WatInstruction::I32LtS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "less than operation can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Le(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32LeS,
+                WasmType::I64 => WatInstruction::I64LeS,
+                WasmType::F32 => WatInstruction::F32Le,
+                WasmType::F64 => WatInstruction::F64Le,
+                WasmType::I8 => WatInstruction::I32LeS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "less then or equal operation can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Ne(_) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Ne,
+                WasmType::I64 => WatInstruction::I64Ne,
+                WasmType::F32 => WatInstruction::F32Ne,
+                WasmType::F64 => WatInstruction::F64Ne,
+                WasmType::I8 => WatInstruction::I32Ne,
+                WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
+                WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
+                WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
+                WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
+                WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
+                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
+                WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Ge(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32GeS,
+                WasmType::I64 => WatInstruction::I64GeS,
+                WasmType::F32 => WatInstruction::F32Ge,
+                WasmType::F64 => WatInstruction::F64Ge,
+                WasmType::I8 => WatInstruction::I32GeS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "greater than or equal operation can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Gt(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32GtS,
+                WasmType::I64 => WatInstruction::I64GtS,
+                WasmType::F32 => WatInstruction::F32Gt,
+                WasmType::F64 => WatInstruction::F64Gt,
+                WasmType::I8 => WatInstruction::I32GtS,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "greater than or equal operation can only be performed on number types",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::AddAssign(add_assign) => {}
         syn::BinOp::SubAssign(_) => todo!("translate_binary: syn::BinOp::SubAssign(_) "),
         syn::BinOp::MulAssign(_) => todo!("translate_binary: syn::BinOp::MulAssign(_) "),
         syn::BinOp::DivAssign(_) => todo!("translate_binary: syn::BinOp::DivAssign(_) "),
@@ -515,6 +727,8 @@ fn translate_binary(
         syn::BinOp::ShrAssign(_) => todo!("translate_binary: syn::BinOp::ShrAssign(_) "),
         _ => todo!("translate_binary: _ "),
     }
+
+    Ok(())
 }
 
 fn get_type(
@@ -522,82 +736,148 @@ fn get_type(
     function: &WatFunction,
     instructions: &[WatInstruction],
 ) -> Option<WasmType> {
-    instructions.last().map(|instr| match instr {
-        WatInstruction::Nop => todo!("WatInstruction::Local: WatInstruction::Nop "),
-        WatInstruction::Local { .. } => {
-            todo!("WatInstruction::Local: WatInstruction::Local ")
-        }
-        WatInstruction::GlobalGet(_) => {
-            todo!("WatInstruction::Local: WatInstruction::GlobalGet(_) ")
-        }
-        // TODO: Handle non existent local
-        WatInstruction::LocalGet(name) => function
-            .locals
-            .get(name)
-            .or(function.params.iter().find(|p| &p.0 == name).map(|p| &p.1))
-            .ok_or(anyhow!("Could not find local {name}"))
-            .unwrap()
-            .clone(),
-        WatInstruction::LocalSet(_) => todo!("get_type: WatInstruction::LocalSet(_)"),
-        WatInstruction::Call(_) => todo!("get_type: WatInstruction::Call(_) "),
+    instructions
+        .last()
+        .map(|instr| match instr {
+            WatInstruction::Nop => todo!("WatInstruction::Local: WatInstruction::Nop "),
+            WatInstruction::Local { .. } => {
+                todo!("WatInstruction::Local: WatInstruction::Local ")
+            }
+            WatInstruction::GlobalGet(_) => {
+                todo!("WatInstruction::Local: WatInstruction::GlobalGet(_) ")
+            }
+            // TODO: Handle non existent local
+            WatInstruction::LocalGet(name) => Some(
+                function
+                    .locals
+                    .get(name)
+                    .or(function.params.iter().find(|p| &p.0 == name).map(|p| &p.1))
+                    .ok_or(anyhow!("Could not find local {name}"))
+                    .unwrap()
+                    .clone(),
+            ),
+            WatInstruction::LocalSet(_) => todo!("get_type: WatInstruction::LocalSet(_)"),
+            WatInstruction::Call(_) => todo!("get_type: WatInstruction::Call(_) "),
 
-        WatInstruction::I32Const(_) => WasmType::I32,
-        WatInstruction::I64Const(_) => WasmType::I64,
-        WatInstruction::F32Const(_) => WasmType::F32,
-        WatInstruction::F64Const(_) => WasmType::F64,
+            WatInstruction::I32Const(_) => Some(WasmType::I32),
+            WatInstruction::I64Const(_) => Some(WasmType::I64),
+            WatInstruction::F32Const(_) => Some(WasmType::F32),
+            WatInstruction::F64Const(_) => Some(WasmType::F64),
 
-        WatInstruction::I32Eqz => WasmType::I32,
-        WatInstruction::I64Eqz => WasmType::I64,
-        WatInstruction::F32Eqz => WasmType::F32,
-        WatInstruction::F64Eqz => WasmType::F64,
+            WatInstruction::I32Eqz => Some(WasmType::I32),
+            WatInstruction::I64Eqz => Some(WasmType::I64),
+            WatInstruction::F32Eqz => Some(WasmType::F32),
+            WatInstruction::F64Eqz => Some(WasmType::F64),
 
-        WatInstruction::StructNew(_) => todo!("get_type: WatInstruction::StructNew(_) "),
-        WatInstruction::StructGet(_, _) => todo!("get_type: WatInstruction::StructGet(_) "),
-        WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
-        WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
-        WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
-        WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
-        WatInstruction::RefFunc(_) => todo!("get_type: WatInstruction::RefFunc(_) "),
-        WatInstruction::Type(_) => todo!("get_type: WatInstruction::Type(_) "),
-        WatInstruction::Return => todo!("get_type: WatInstruction::Return "),
-        WatInstruction::ReturnCall(_) => todo!("get_type: WatInstruction::ReturnCall(_) "),
-        WatInstruction::Block { .. } => todo!("get_type: WatInstruction::Block "),
-        WatInstruction::Loop { .. } => todo!("get_type: WatInstruction::Loop "),
-        WatInstruction::If { .. } => todo!("get_type: WatInstruction::If "),
-        WatInstruction::BrIf(_) => todo!("get_type: WatInstruction::BrIf(_) "),
-        WatInstruction::Br(_) => todo!("get_type: WatInstruction::Br(_) "),
-        WatInstruction::Empty => todo!("get_type: WatInstruction::Empty "),
-        WatInstruction::Log => todo!("get_type: WatInstruction::Log "),
-        WatInstruction::Identifier(_) => todo!("get_type: WatInstruction::Identifier(_) "),
-        WatInstruction::Drop => todo!("get_type: WatInstruction::Drop "),
-        WatInstruction::LocalTee(_) => todo!("get_type: WatInstruction::LocalTee(_) "),
-        WatInstruction::RefI31 => WasmType::I31Ref,
-        WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
-        WatInstruction::Try { .. } => todo!("get_type: WatInstruction::Try "),
-        WatInstruction::Catch(_, _) => todo!("get_type: WatInstruction::Catch(_, "),
-        WatInstruction::CatchAll(_) => todo!("get_type: WatInstruction::CatchAll(_) "),
-        WatInstruction::I32Add => WasmType::I32,
-        WatInstruction::I64Add => WasmType::I64,
-        WatInstruction::F32Add => WasmType::F32,
-        WatInstruction::F64Add => WasmType::F64,
-        WatInstruction::I32GeS => WasmType::I32,
-        WatInstruction::ArrayLen => WasmType::I32,
-        WatInstruction::ArrayGet(name) => get_element_type(module, function, name).unwrap(),
-        WatInstruction::ArrayGetU(_) => WasmType::I32,
-        WatInstruction::ArraySet(name) => get_element_type(module, function, name).unwrap(),
-        WatInstruction::ArrayNewFixed(_, _) => {
-            todo!("get_type: WatInstruction::NewFixed")
-        }
-        WatInstruction::I32Eq => WasmType::I32,
-        WatInstruction::I64Eq => WasmType::I32,
-        WatInstruction::F32Eq => WasmType::I32,
-        WatInstruction::F64Eq => WasmType::I32,
-        WatInstruction::I64ExtendI32S => WasmType::I64,
-        WatInstruction::I32WrapI64 => WasmType::I32,
-        WatInstruction::I31GetS => WasmType::I32,
-        WatInstruction::F64PromoteF32 => WasmType::F64,
-        WatInstruction::F32DemoteF64 => WasmType::F32,
-    })
+            WatInstruction::StructNew(_) => todo!("get_type: WatInstruction::StructNew(_) "),
+            WatInstruction::StructGet(_, _) => todo!("get_type: WatInstruction::StructGet(_) "),
+            WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
+            WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
+            WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
+            WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
+            WatInstruction::RefFunc(_) => todo!("get_type: WatInstruction::RefFunc(_) "),
+            WatInstruction::Type(_) => todo!("get_type: WatInstruction::Type(_) "),
+            WatInstruction::Return => todo!("get_type: WatInstruction::Return "),
+            WatInstruction::ReturnCall(_) => todo!("get_type: WatInstruction::ReturnCall(_) "),
+            WatInstruction::Block { .. } => todo!("get_type: WatInstruction::Block "),
+            WatInstruction::Loop { .. } => todo!("get_type: WatInstruction::Loop "),
+            WatInstruction::If { .. } => todo!("get_type: WatInstruction::If "),
+            WatInstruction::BrIf(_) => todo!("get_type: WatInstruction::BrIf(_) "),
+            WatInstruction::Br(_) => todo!("get_type: WatInstruction::Br(_) "),
+            WatInstruction::Empty => todo!("get_type: WatInstruction::Empty "),
+            WatInstruction::Log => todo!("get_type: WatInstruction::Log "),
+            WatInstruction::Identifier(_) => todo!("get_type: WatInstruction::Identifier(_) "),
+            WatInstruction::Drop => todo!("get_type: WatInstruction::Drop "),
+            WatInstruction::LocalTee(_) => todo!("get_type: WatInstruction::LocalTee(_) "),
+            WatInstruction::RefI31 => Some(WasmType::I31Ref),
+            WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
+            WatInstruction::Try { .. } => todo!("get_type: WatInstruction::Try "),
+            WatInstruction::Catch(_, _) => todo!("get_type: WatInstruction::Catch(_, "),
+            WatInstruction::CatchAll(_) => todo!("get_type: WatInstruction::CatchAll(_) "),
+            WatInstruction::I32Add => Some(WasmType::I32),
+            WatInstruction::I64Add => Some(WasmType::I64),
+            WatInstruction::F32Add => Some(WasmType::F32),
+            WatInstruction::F64Add => Some(WasmType::F64),
+            WatInstruction::I32GeS => Some(WasmType::I32),
+            WatInstruction::ArrayLen => Some(WasmType::I32),
+            WatInstruction::ArrayGet(name) => {
+                Some(get_element_type(module, function, name).ok()).flatten()
+            }
+            WatInstruction::ArrayGetU(_) => Some(WasmType::I32),
+            WatInstruction::ArraySet(name) => {
+                Some(get_element_type(module, function, name).ok()).flatten()
+            }
+            WatInstruction::ArrayNewFixed(_, _) => {
+                todo!("get_type: WatInstruction::NewFixed")
+            }
+            WatInstruction::I32Eq => Some(WasmType::I32),
+            WatInstruction::I64Eq => Some(WasmType::I32),
+            WatInstruction::F32Eq => Some(WasmType::I32),
+            WatInstruction::F64Eq => Some(WasmType::I32),
+            WatInstruction::I64ExtendI32S => Some(WasmType::I64),
+            WatInstruction::I32WrapI64 => Some(WasmType::I32),
+            WatInstruction::I31GetS => Some(WasmType::I32),
+            WatInstruction::F64PromoteF32 => Some(WasmType::F64),
+            WatInstruction::F32DemoteF64 => Some(WasmType::F32),
+            WatInstruction::I32Sub => Some(WasmType::I32),
+            WatInstruction::I64Sub => Some(WasmType::I64),
+            WatInstruction::F32Sub => Some(WasmType::F32),
+            WatInstruction::F64Sub => Some(WasmType::F64),
+            WatInstruction::I32Mul => Some(WasmType::I32),
+            WatInstruction::I64Mul => Some(WasmType::I64),
+            WatInstruction::F32Mul => Some(WasmType::F32),
+            WatInstruction::F64Mul => Some(WasmType::F64),
+            WatInstruction::I32Div => Some(WasmType::I32),
+            WatInstruction::I64Div => Some(WasmType::I64),
+            WatInstruction::F32Div => Some(WasmType::F32),
+            WatInstruction::F64Div => Some(WasmType::F64),
+            WatInstruction::I32RemS => Some(WasmType::I32),
+            WatInstruction::I64RemS => Some(WasmType::I64),
+            WatInstruction::I32RemU => Some(WasmType::I32),
+            WatInstruction::I64RemU => Some(WasmType::I64),
+            WatInstruction::I32Ne => Some(WasmType::I32),
+            WatInstruction::I64Ne => Some(WasmType::I64),
+            WatInstruction::F32Ne => Some(WasmType::F32),
+            WatInstruction::F64Ne => Some(WasmType::F64),
+            WatInstruction::I32And => Some(WasmType::I32),
+            WatInstruction::I64And => Some(WasmType::I64),
+            WatInstruction::I32Or => Some(WasmType::I32),
+            WatInstruction::I64Or => Some(WasmType::I64),
+            WatInstruction::I32Xor => Some(WasmType::I32),
+            WatInstruction::I64Xor => Some(WasmType::I64),
+            WatInstruction::I32LtS => Some(WasmType::I32),
+            WatInstruction::I64LtS => Some(WasmType::I64),
+            WatInstruction::I32LtU => Some(WasmType::I32),
+            WatInstruction::I64LtU => Some(WasmType::I64),
+            WatInstruction::F32Lt => Some(WasmType::F32),
+            WatInstruction::F64Lt => Some(WasmType::F64),
+            WatInstruction::I32LeS => Some(WasmType::I32),
+            WatInstruction::I64LeS => Some(WasmType::I64),
+            WatInstruction::I32LeU => Some(WasmType::I32),
+            WatInstruction::I64LeU => Some(WasmType::I64),
+            WatInstruction::F32Le => Some(WasmType::F32),
+            WatInstruction::F64Le => Some(WasmType::F64),
+            WatInstruction::I64GeS => Some(WasmType::I64),
+            WatInstruction::I32GeU => Some(WasmType::I32),
+            WatInstruction::I64GeU => Some(WasmType::I64),
+            WatInstruction::F32Ge => Some(WasmType::F32),
+            WatInstruction::F64Ge => Some(WasmType::F64),
+            WatInstruction::I32GtS => Some(WasmType::I32),
+            WatInstruction::I64GtS => Some(WasmType::I64),
+            WatInstruction::I32GtU => Some(WasmType::I32),
+            WatInstruction::I64GtU => Some(WasmType::I64),
+            WatInstruction::F32Gt => Some(WasmType::F32),
+            WatInstruction::F64Gt => Some(WasmType::F64),
+            WatInstruction::I32ShlS => Some(WasmType::I32),
+            WatInstruction::I64ShlS => Some(WasmType::I64),
+            WatInstruction::I32ShlU => Some(WasmType::I32),
+            WatInstruction::I64ShlU => Some(WasmType::I64),
+            WatInstruction::I32ShrS => Some(WasmType::I32),
+            WatInstruction::I64ShrS => Some(WasmType::I64),
+            WatInstruction::I32ShrU => Some(WasmType::I32),
+            WatInstruction::I64ShrU => Some(WasmType::I64),
+        })
+        .flatten()
 }
 
 fn extract_name_from_pattern(pattern: &Pat) -> String {
@@ -985,6 +1265,7 @@ fn translate_expression(
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
+            println!("BINARY: {binary:#?}");
             let mut left_instructions = Vec::new();
             let mut right_instructions = Vec::new();
             translate_expression(
@@ -1456,6 +1737,63 @@ impl ToTokens for OurWatInstruction {
             WatInstruction::I31GetS => quote! { tarnik_ast::WatInstruction::I31GetS },
             WatInstruction::F64PromoteF32 => quote! { tarnik_ast::WatInstruction::F64PromoteF32 },
             WatInstruction::F32DemoteF64 => quote! { tarnik_ast::WatInstruction::F32DemoteF64 },
+            WatInstruction::I32Sub => quote! { tarnik_ast::WatInstruction::I32Sub },
+            WatInstruction::I64Sub => quote! { tarnik_ast::WatInstruction::I64Sub },
+            WatInstruction::F32Sub => quote! { tarnik_ast::WatInstruction::F32Sub },
+            WatInstruction::F64Sub => quote! { tarnik_ast::WatInstruction::F64Sub },
+            WatInstruction::I32Mul => quote! { tarnik_ast::WatInstruction::I32Mul },
+            WatInstruction::I64Mul => quote! { tarnik_ast::WatInstruction::I64Mul },
+            WatInstruction::F32Mul => quote! { tarnik_ast::WatInstruction::F32Mul },
+            WatInstruction::F64Mul => quote! { tarnik_ast::WatInstruction::F64Mul },
+            WatInstruction::I32Div => quote! { tarnik_ast::WatInstruction::I32Div },
+            WatInstruction::I64Div => quote! { tarnik_ast::WatInstruction::I64Div },
+            WatInstruction::F32Div => quote! { tarnik_ast::WatInstruction::F32Div },
+            WatInstruction::F64Div => quote! { tarnik_ast::WatInstruction::F64Div },
+            WatInstruction::I32RemS => quote! { tarnik_ast::WatInstruction::I32RemS },
+            WatInstruction::I64RemS => quote! { tarnik_ast::WatInstruction::I64RemS },
+            WatInstruction::I32RemU => quote! { tarnik_ast::WatInstruction::I32RemU },
+            WatInstruction::I64RemU => quote! { tarnik_ast::WatInstruction::I64RemU },
+            WatInstruction::I32And => quote! { tarnik_ast::WatInstruction::I32And },
+            WatInstruction::I64And => quote! { tarnik_ast::WatInstruction::I64And },
+            WatInstruction::I32Or => quote! { tarnik_ast::WatInstruction::I32Or },
+            WatInstruction::I64Or => quote! { tarnik_ast::WatInstruction::I64Or },
+            WatInstruction::I32Xor => quote! { tarnik_ast::WatInstruction::I32Xor },
+            WatInstruction::I64Xor => quote! { tarnik_ast::WatInstruction::I64Xor },
+            WatInstruction::I32Ne => quote! { tarnik_ast::WatInstruction::I32Ne },
+            WatInstruction::I64Ne => quote! { tarnik_ast::WatInstruction::I64Ne },
+            WatInstruction::F32Ne => quote! { tarnik_ast::WatInstruction::F32Ne},
+            WatInstruction::F64Ne => quote! { tarnik_ast::WatInstruction::F64Ne},
+            WatInstruction::I32LtS => quote! { tarnik_ast::WatInstruction::I32LtS},
+            WatInstruction::I64LtS => quote! { tarnik_ast::WatInstruction::I64LtS},
+            WatInstruction::I32LtU => quote! { tarnik_ast::WatInstruction::I32LtU},
+            WatInstruction::I64LtU => quote! { tarnik_ast::WatInstruction::I64LtU},
+            WatInstruction::F32Lt => quote! { tarnik_ast::WatInstruction::F32Lt},
+            WatInstruction::F64Lt => quote! { tarnik_ast::WatInstruction::F64Lt},
+            WatInstruction::I32LeS => quote! { tarnik_ast::WatInstruction::I32LeS},
+            WatInstruction::I64LeS => quote! { tarnik_ast::WatInstruction::I64LeS},
+            WatInstruction::I32LeU => quote! { tarnik_ast::WatInstruction::I32LeU},
+            WatInstruction::I64LeU => quote! { tarnik_ast::WatInstruction::I64LeU},
+            WatInstruction::F32Le => quote! { tarnik_ast::WatInstruction::F32Le},
+            WatInstruction::F64Le => quote! { tarnik_ast::WatInstruction::F64Le},
+            WatInstruction::I64GeS => quote! { tarnik_ast::WatInstruction::I64GeS},
+            WatInstruction::I32GeU => quote! { tarnik_ast::WatInstruction::I32GeU},
+            WatInstruction::I64GeU => quote! { tarnik_ast::WatInstruction::I64GeU},
+            WatInstruction::F32Ge => quote! { tarnik_ast::WatInstruction::F32Ge},
+            WatInstruction::F64Ge => quote! { tarnik_ast::WatInstruction::F64Ge},
+            WatInstruction::I32GtS => quote! { tarnik_ast::WatInstruction::I32GtS},
+            WatInstruction::I64GtS => quote! { tarnik_ast::WatInstruction::I64GtS},
+            WatInstruction::I32GtU => quote! { tarnik_ast::WatInstruction::I32GtU},
+            WatInstruction::I64GtU => quote! { tarnik_ast::WatInstruction::I64GtU},
+            WatInstruction::F32Gt => quote! { tarnik_ast::WatInstruction::F32Gt},
+            WatInstruction::F64Gt => quote! { tarnik_ast::WatInstruction::F64Gt},
+            WatInstruction::I32ShlS => quote! { tarnik_ast::WatInstruction::I32ShlS},
+            WatInstruction::I64ShlS => quote! { tarnik_ast::WatInstruction::I64ShlS},
+            WatInstruction::I32ShlU => quote! { tarnik_ast::WatInstruction::I32ShlU},
+            WatInstruction::I64ShlU => quote! { tarnik_ast::WatInstruction::I64ShlU},
+            WatInstruction::I32ShrS => quote! { tarnik_ast::WatInstruction::I32ShrS},
+            WatInstruction::I64ShrS => quote! { tarnik_ast::WatInstruction::I64ShrS},
+            WatInstruction::I32ShrU => quote! { tarnik_ast::WatInstruction::I32ShrU},
+            WatInstruction::I64ShrU => quote! { tarnik_ast::WatInstruction::I64ShrU},
         };
         tokens.extend(tokens_str);
     }
