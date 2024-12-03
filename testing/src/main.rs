@@ -9,7 +9,9 @@ fn main() {
         #[export("_start")]
         fn run() {
             let x: i32 = 0;
-            x = -1;
+            x += 1;
+            memory[0] = 'a';
+            let y: i32 = memory[10];
         }
     };
 

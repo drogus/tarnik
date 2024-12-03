@@ -174,9 +174,10 @@ impl Parse for GlobalScope {
                         None
                     };
 
-                    module.add_memory(&name, size, max_size);
+                    let label = format!("${name}");
+                    module.add_memory(&label, size, max_size);
                     if let Some(export_name) = export_next {
-                        module.add_export(export_name, "memory", format!("${}", name));
+                        module.add_export(export_name, "memory", label);
                         export_next = None;
                     }
                 } else {
@@ -968,6 +969,29 @@ fn get_type(
             WatInstruction::I64ShrU => Some(WasmType::I64),
             WatInstruction::F32Neg => Some(WasmType::F32),
             WatInstruction::F64Neg => Some(WasmType::F64),
+            WatInstruction::I32Store(_) => None,
+            WatInstruction::I64Store(_) => None,
+            WatInstruction::F32Store(_) => None,
+            WatInstruction::F64Store(_) => None,
+            WatInstruction::I32Store8(_) => None,
+            WatInstruction::I32Store16(_) => None,
+            WatInstruction::I64Store8(_) => None,
+            WatInstruction::I64Store16(_) => None,
+            WatInstruction::I64Store32(_) => None,
+            WatInstruction::I32Load(_) => Some(WasmType::I32),
+            WatInstruction::I64Load(_) => Some(WasmType::I64),
+            WatInstruction::F32Load(_) => Some(WasmType::F32),
+            WatInstruction::F64Load(_) => Some(WasmType::F64),
+            WatInstruction::I32Load8S(_) => Some(WasmType::I32),
+            WatInstruction::I32Load8U(_) => Some(WasmType::I32),
+            WatInstruction::I32Load16S(_) => Some(WasmType::I32),
+            WatInstruction::I32Load16U(_) => Some(WasmType::I32),
+            WatInstruction::I64Load8S(_) => Some(WasmType::I64),
+            WatInstruction::I64Load8U(_) => Some(WasmType::I64),
+            WatInstruction::I64Load16S(_) => Some(WasmType::I64),
+            WatInstruction::I64Load16U(_) => Some(WasmType::I64),
+            WatInstruction::I64Load32S(_) => Some(WasmType::I64),
+            WatInstruction::I64Load32U(_) => Some(WasmType::I64),
         })
         .flatten()
 }
@@ -1223,6 +1247,29 @@ fn translate_lit(
     Ok(())
 }
 
+enum LabelType {
+    Global,
+    Local,
+    Memory,
+}
+fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Option<LabelType> {
+    let label = if !label.starts_with("$") {
+        format!("${label}")
+    } else {
+        label.into()
+    };
+
+    if module.memories.contains_key(&label) {
+        Some(LabelType::Memory)
+    } else if module.globals.contains_key(&label) {
+        Some(LabelType::Global)
+    } else if function.locals.contains_key(&label) {
+        Some(LabelType::Local)
+    } else {
+        None
+    }
+}
+
 // TODO: the passing of all of those details is getting ridiculous. I would like to rewrite
 // these functions to work on a struct that keeps all the details within a struct, so that
 // I don't have to pass everything to each subsequent function call
@@ -1267,8 +1314,24 @@ fn translate_expression(
             match *expr_assign.left.clone() {
                 Expr::Index(expr_index) => {
                     if let Expr::Path(syn::ExprPath { path, .. }) = expr_index.expr.deref() {
-                        let array_name = format!("${}", path.segments[0].ident);
-                        current_block.push(WatInstruction::local_get(&array_name));
+                        let target_name = format!("${}", path.segments[0].ident);
+                        let label_type = match get_label_type(module, function, &target_name) {
+                            Some(t) => t,
+                            None => return Err(syn::Error::new_spanned(
+                                path,
+                                "${target_name} not found, it's not a global, local nor a memory",
+                            )),
+                        };
+
+                        match label_type {
+                            LabelType::Global => {
+                                current_block.push(WatInstruction::global_get(&target_name))
+                            }
+                            LabelType::Local => {
+                                current_block.push(WatInstruction::local_get(&target_name))
+                            }
+                            LabelType::Memory => {}
+                        }
                         translate_expression(
                             module,
                             function,
@@ -1277,17 +1340,45 @@ fn translate_expression(
                             None,
                             Some(&WasmType::I32),
                         )?;
-                        let array_type = get_array_type(module, function, &array_name).unwrap();
-                        let element_type = get_element_type(module, function, &array_type).unwrap();
-                        translate_expression(
-                            module,
-                            function,
-                            current_block,
-                            expr_assign.right.deref(),
-                            None,
-                            Some(&element_type),
-                        )?;
-                        current_block.push(WatInstruction::array_set(array_type));
+                        match label_type {
+                            LabelType::Global | LabelType::Local => {
+                                let array_type =
+                                    get_array_type(module, function, &target_name).unwrap();
+                                let element_type =
+                                    get_element_type(module, function, &array_type).unwrap();
+                                translate_expression(
+                                    module,
+                                    function,
+                                    current_block,
+                                    expr_assign.right.deref(),
+                                    None,
+                                    Some(&element_type),
+                                )?;
+                                current_block.push(WatInstruction::array_set(array_type));
+                            }
+                            LabelType::Memory => {
+                                translate_expression(
+                                    module,
+                                    function,
+                                    current_block,
+                                    expr_assign.right.deref(),
+                                    None,
+                                    None,
+                                )?;
+
+                                let ty = get_type(module, function, current_block);
+                                match ty {
+                                    Some(WasmType::I32) => {
+                                        current_block
+                                            .push(WatInstruction::I32Store(target_name.into()));
+                                    }
+                                    Some(_) => {
+                                        panic!("bar");
+                                    }
+                                    None => panic!("Foo"),
+                                }
+                            }
+                        }
                     } else {
                         // TODO: this should be tied to the code line
                         panic!("Accessing arrays is only possible by path at the moment");
@@ -1357,6 +1448,7 @@ fn translate_expression(
         Expr::Async(_) => todo!("translate_expression: Expr::Async(_) "),
         Expr::Await(_) => todo!("translate_expression: Expr::Await(_) "),
         Expr::Binary(binary) => {
+            // TODO: handle memories for assign binary operations like x += 1;
             let mut left_instructions = Vec::new();
             let mut right_instructions = Vec::new();
             translate_expression(
@@ -1398,6 +1490,7 @@ fn translate_expression(
                 | syn::BinOp::BitOrAssign(_)
                 | syn::BinOp::ShlAssign(_)
                 | syn::BinOp::ShrAssign(_) => {
+                    // TODO: handle memories here
                     if let Expr::Path(path_expr) = binary.left.deref() {
                         let name = path_expr.path.segments[0].ident.to_string();
                         current_block.push(WatInstruction::local_set(name));
@@ -1531,8 +1624,24 @@ fn translate_expression(
         }
         Expr::Index(expr_index) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = &*expr_index.expr {
-                let array_name = format!("${}", path.segments[0].ident);
-                current_block.push(WatInstruction::local_get(&array_name));
+                let target_name = format!("${}", path.segments[0].ident);
+                let label_type = match get_label_type(module, function, &target_name) {
+                    Some(t) => t,
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            path,
+                            "${target_name} not found, it's not a global, local nor a memory",
+                        ))
+                    }
+                };
+
+                match label_type {
+                    LabelType::Global => {
+                        current_block.push(WatInstruction::global_get(&target_name))
+                    }
+                    LabelType::Local => current_block.push(WatInstruction::local_get(&target_name)),
+                    LabelType::Memory => {}
+                }
                 translate_expression(
                     module,
                     function,
@@ -1541,17 +1650,36 @@ fn translate_expression(
                     None,
                     Some(&WasmType::I32),
                 )?;
-                let array_type = get_array_type(module, function, &array_name).unwrap();
 
-                let element_type = get_element_type(module, function, &array_type).unwrap();
-                if element_type == WasmType::I8 {
-                    current_block.push(WatInstruction::array_get_u(array_type));
-                } else {
-                    current_block.push(WatInstruction::array_get(array_type));
+                match label_type {
+                    LabelType::Global | LabelType::Local => {
+                        let array_type = get_array_type(module, function, &target_name).unwrap();
+
+                        let element_type = get_element_type(module, function, &array_type).unwrap();
+                        if element_type == WasmType::I8 {
+                            current_block.push(WatInstruction::array_get_u(array_type));
+                        } else {
+                            current_block.push(WatInstruction::array_get(array_type));
+                        }
+                    }
+                    LabelType::Memory => match ty {
+                        Some(WasmType::I32) => {
+                            current_block.push(WatInstruction::I32Load(target_name.into()));
+                        }
+                        Some(_) => todo!(),
+                        None => {
+                            return Err(syn::Error::new_spanned(
+                                expr,
+                                "Couldn't figure out type for memory access",
+                            ))
+                        }
+                    },
                 }
             } else {
-                // TODO: this should be tied to the code line
-                panic!("Only calling functions by path is supported at the moment");
+                return Err(syn::Error::new_spanned(
+                    expr,
+                    "Arrays can be only accessed by specifying the array name",
+                ));
             }
         }
         Expr::Infer(_) => todo!("translate_expression: Expr::Infer(_) "),
@@ -1695,90 +1823,77 @@ impl ToTokens for OurWasmType {
 
 impl ToTokens for OurWatInstruction {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let tokens_str = match &self.0 {
-            WatInstruction::Nop => {
+        use WatInstruction::*;
+        let w = quote! { tarnik_ast::WatInstruction };
+        let wat_instruction = &self.0;
+        let tokens_str = match &wat_instruction {
+            Nop => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Nop ")
             }
-            WatInstruction::Local { .. } => {
+            Local { .. } => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Local ")
             }
-            WatInstruction::GlobalGet(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::GlobalGet(_) ")
-            }
-            WatInstruction::LocalGet(name) => {
-                quote! { tarnik_ast::WatInstruction::LocalGet(#name.to_string()) }
-            }
-            WatInstruction::LocalSet(name) => {
-                quote! { tarnik_ast::WatInstruction::LocalSet(#name.to_string()) }
-            }
-            WatInstruction::Call(name) => {
-                quote! { tarnik_ast::WatInstruction::Call(#name.to_string()) }
-            }
-            WatInstruction::I32Const(value) => {
-                quote! { tarnik_ast::WatInstruction::I32Const(#value) }
-            }
-            WatInstruction::I64Const(value) => {
-                quote! { tarnik_ast::WatInstruction::I32Const(#value) }
-            }
-            WatInstruction::F32Const(value) => {
-                quote! { tarnik_ast::WatInstruction::F32Const(#value) }
-            }
-            WatInstruction::F64Const(value) => {
-                quote! { tarnik_ast::WatInstruction::F64Const(#value) }
-            }
+            GlobalGet(name) => quote! { #w::GlobalGet(#name.to_string()) },
+            LocalGet(name) => quote! { #w::LocalGet(#name.to_string()) },
+            LocalSet(name) => quote! { #w::LocalSet(#name.to_string()) },
 
-            WatInstruction::I32Eqz => quote! { tarnik_ast::WatInstruction::I32Eqz },
-            WatInstruction::I64Eqz => quote! { tarnik_ast::WatInstruction::I64Eqz },
-            WatInstruction::F32Eqz => quote! { tarnik_ast::WatInstruction::F32Eqz },
-            WatInstruction::F64Eqz => quote! { tarnik_ast::WatInstruction::F64Eqz },
+            Call(name) => quote! { #w::Call(#name.to_string()) },
 
-            WatInstruction::StructNew(type_name) => {
-                quote! { tarnik_ast::WatInstruction::StructNew(#type_name.to_string()) }
+            I32Const(value) => quote! { #w::I32Const(#value) },
+            I64Const(value) => quote! { #w::I32Const(#value) },
+            F32Const(value) => quote! { #w::F32Const(#value) },
+            F64Const(value) => quote! { #w::F64Const(#value) },
+
+            I32Eqz => quote! { #w::I32Eqz },
+            I64Eqz => quote! { #w::I64Eqz },
+            F32Eqz => quote! { #w::F32Eqz },
+            F64Eqz => quote! { #w::F64Eqz },
+
+            StructNew(type_name) => quote! { #w::StructNew(#type_name.to_string()) },
+            StructGet(type_name, field_name) => {
+                quote! { #w::StructGet(#type_name.to_string(), #field_name.to_string() ) }
             }
-            WatInstruction::StructGet(type_name, field_name) => {
-                quote! { tarnik_ast::WatInstruction::StructGet(#type_name.to_string(), #field_name.to_string() ) }
+            StructSet(type_name, field_name) => {
+                quote! { #w::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
-            WatInstruction::StructSet(type_name, field_name) => {
-                quote! { tarnik_ast::WatInstruction::StructSet(#type_name.to_string(), #field_name.to_string() ) }
-            }
-            WatInstruction::ArrayNew(_) => {
+            ArrayNew(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::ArrayNew(_) ")
             }
-            WatInstruction::RefNull(_) => {
+            RefNull(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefNull(_) ")
             }
-            WatInstruction::Ref(_) => {
+            Ref(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Ref(_) ")
             }
-            WatInstruction::RefFunc(_) => {
+            RefFunc(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefFunc(_) ")
             }
-            WatInstruction::Type(_) => {
+            Type(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Type(_) ")
             }
-            WatInstruction::Return => quote! { tarnik_ast::WatInstruction::Return },
-            WatInstruction::ReturnCall(_) => {
+            Return => quote! { #w::Return },
+            ReturnCall(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::ReturnCall(_) ")
             }
-            WatInstruction::Block {
+            Block {
                 label,
                 instructions,
             } => {
                 let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
                 quote! {
-                    tarnik_ast::WatInstruction::block(#label, vec![#(#instructions),*])
+                    #w::block(#label, vec![#(#instructions),*])
                 }
             }
-            WatInstruction::Loop {
+            Loop {
                 label,
                 instructions,
             } => {
                 let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
                 quote! {
-                    tarnik_ast::WatInstruction::r#loop(#label, vec![#(#instructions),*])
+                    #w::r#loop(#label, vec![#(#instructions),*])
                 }
             }
-            WatInstruction::If { then, r#else } => {
+            If { then, r#else } => {
                 let then_instructions = then.iter().map(|i| OurWatInstruction(i.clone()));
                 let else_code = if let Some(r#else) = r#else {
                     let else_instructions = r#else.iter().map(|i| OurWatInstruction(i.clone()));
@@ -1788,133 +1903,140 @@ impl ToTokens for OurWatInstruction {
                 };
 
                 quote! {
-                    tarnik_ast::WatInstruction::If {then: vec![#(#then_instructions),*], r#else: #else_code }
+                    #w::If {then: vec![#(#then_instructions),*], r#else: #else_code }
                 }
             }
-            WatInstruction::BrIf(label) => {
-                quote! { tarnik_ast::WatInstruction::br_if(#label) }
-            }
-            WatInstruction::Br(label) => {
-                quote! { tarnik_ast::WatInstruction::br(#label) }
-            }
-            WatInstruction::Empty => {
+            BrIf(label) => quote! { #w::br_if(#label) },
+            Br(label) => quote! { #w::br(#label) },
+            Empty => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Empty ")
             }
-            WatInstruction::Log => {
+            Log => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Log ")
             }
-            WatInstruction::Identifier(_) => {
+            Identifier(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Identifier(_) ")
             }
-            WatInstruction::Drop => {
+            Drop => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Drop ")
             }
-            WatInstruction::LocalTee(name) => {
-                quote! { tarnik_ast::WatInstruction::LocalTee(#name.to_string()) }
-            }
-            WatInstruction::RefI31 => {
+            LocalTee(name) => quote! { #w::LocalTee(#name.to_string()) },
+            RefI31 => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
             }
-            WatInstruction::Throw(label) => {
-                quote! { tarnik_ast::WatInstruction::Throw(#label.to_string()) }
-            }
-            WatInstruction::Try { .. } => {
+            Throw(label) => quote! { #w::Throw(#label.to_string()) },
+            Try { .. } => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Try ")
             }
-            WatInstruction::Catch(_, _) => {
+            Catch(_, _) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Catch(_, ")
             }
-            WatInstruction::CatchAll(_) => {
+            CatchAll(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::CatchAll(_) ")
             }
-            WatInstruction::I32Add => quote! { tarnik_ast::WatInstruction::I32Add },
-            WatInstruction::I64Add => quote! { tarnik_ast::WatInstruction::I64Add },
-            WatInstruction::F32Add => quote! { tarnik_ast::WatInstruction::F32Add },
-            WatInstruction::F64Add => quote! { tarnik_ast::WatInstruction::F64Add },
-            WatInstruction::I32GeS => quote! { tarnik_ast::WatInstruction::I32GeS },
-            WatInstruction::ArrayLen => quote! { tarnik_ast::WatInstruction::ArrayLen },
-            WatInstruction::ArrayGet(name) => {
-                quote! { tarnik_ast::WatInstruction::ArrayGet(#name.to_string()) }
-            }
-            WatInstruction::ArrayGetU(name) => {
-                quote! { tarnik_ast::WatInstruction::ArrayGetU(#name.to_string()) }
-            }
-            WatInstruction::ArraySet(name) => {
-                quote! { tarnik_ast::WatInstruction::ArraySet(#name.to_string()) }
-            }
-            WatInstruction::ArrayNewFixed(typeidx, n) => {
-                quote! { tarnik_ast::WatInstruction::ArrayNewFixed(#typeidx.to_string(), #n) }
-            }
-            WatInstruction::I32Eq => quote! { tarnik_ast::WatInstruction::I32Eq },
-            WatInstruction::I64Eq => quote! { tarnik_ast::WatInstruction::I64Eq },
-            WatInstruction::F32Eq => quote! { tarnik_ast::WatInstruction::F32Eq },
-            WatInstruction::F64Eq => quote! { tarnik_ast::WatInstruction::F64Eq },
-            WatInstruction::I64ExtendI32S => quote! { tarnik_ast::WatInstruction::I64ExtendI32S },
-            WatInstruction::I32WrapI64 => quote! { tarnik_ast::WatInstruction::I32WrapI64 },
-            WatInstruction::I31GetS => quote! { tarnik_ast::WatInstruction::I31GetS },
-            WatInstruction::F64PromoteF32 => quote! { tarnik_ast::WatInstruction::F64PromoteF32 },
-            WatInstruction::F32DemoteF64 => quote! { tarnik_ast::WatInstruction::F32DemoteF64 },
-            WatInstruction::I32Sub => quote! { tarnik_ast::WatInstruction::I32Sub },
-            WatInstruction::I64Sub => quote! { tarnik_ast::WatInstruction::I64Sub },
-            WatInstruction::F32Sub => quote! { tarnik_ast::WatInstruction::F32Sub },
-            WatInstruction::F64Sub => quote! { tarnik_ast::WatInstruction::F64Sub },
-            WatInstruction::I32Mul => quote! { tarnik_ast::WatInstruction::I32Mul },
-            WatInstruction::I64Mul => quote! { tarnik_ast::WatInstruction::I64Mul },
-            WatInstruction::F32Mul => quote! { tarnik_ast::WatInstruction::F32Mul },
-            WatInstruction::F64Mul => quote! { tarnik_ast::WatInstruction::F64Mul },
-            WatInstruction::I32DivS => quote! { tarnik_ast::WatInstruction::I32DivS },
-            WatInstruction::I64DivS => quote! { tarnik_ast::WatInstruction::I64DivS },
-            WatInstruction::I32DivU => quote! { tarnik_ast::WatInstruction::I32DivU },
-            WatInstruction::I64DivU => quote! { tarnik_ast::WatInstruction::I64DivU },
-            WatInstruction::F32Div => quote! { tarnik_ast::WatInstruction::F32Div },
-            WatInstruction::F64Div => quote! { tarnik_ast::WatInstruction::F64Div },
-            WatInstruction::I32RemS => quote! { tarnik_ast::WatInstruction::I32RemS },
-            WatInstruction::I64RemS => quote! { tarnik_ast::WatInstruction::I64RemS },
-            WatInstruction::I32RemU => quote! { tarnik_ast::WatInstruction::I32RemU },
-            WatInstruction::I64RemU => quote! { tarnik_ast::WatInstruction::I64RemU },
-            WatInstruction::I32And => quote! { tarnik_ast::WatInstruction::I32And },
-            WatInstruction::I64And => quote! { tarnik_ast::WatInstruction::I64And },
-            WatInstruction::I32Or => quote! { tarnik_ast::WatInstruction::I32Or },
-            WatInstruction::I64Or => quote! { tarnik_ast::WatInstruction::I64Or },
-            WatInstruction::I32Xor => quote! { tarnik_ast::WatInstruction::I32Xor },
-            WatInstruction::I64Xor => quote! { tarnik_ast::WatInstruction::I64Xor },
-            WatInstruction::I32Ne => quote! { tarnik_ast::WatInstruction::I32Ne },
-            WatInstruction::I64Ne => quote! { tarnik_ast::WatInstruction::I64Ne },
-            WatInstruction::F32Ne => quote! { tarnik_ast::WatInstruction::F32Ne},
-            WatInstruction::F64Ne => quote! { tarnik_ast::WatInstruction::F64Ne},
-            WatInstruction::I32LtS => quote! { tarnik_ast::WatInstruction::I32LtS},
-            WatInstruction::I64LtS => quote! { tarnik_ast::WatInstruction::I64LtS},
-            WatInstruction::I32LtU => quote! { tarnik_ast::WatInstruction::I32LtU},
-            WatInstruction::I64LtU => quote! { tarnik_ast::WatInstruction::I64LtU},
-            WatInstruction::F32Lt => quote! { tarnik_ast::WatInstruction::F32Lt},
-            WatInstruction::F64Lt => quote! { tarnik_ast::WatInstruction::F64Lt},
-            WatInstruction::I32LeS => quote! { tarnik_ast::WatInstruction::I32LeS},
-            WatInstruction::I64LeS => quote! { tarnik_ast::WatInstruction::I64LeS},
-            WatInstruction::I32LeU => quote! { tarnik_ast::WatInstruction::I32LeU},
-            WatInstruction::I64LeU => quote! { tarnik_ast::WatInstruction::I64LeU},
-            WatInstruction::F32Le => quote! { tarnik_ast::WatInstruction::F32Le},
-            WatInstruction::F64Le => quote! { tarnik_ast::WatInstruction::F64Le},
-            WatInstruction::I64GeS => quote! { tarnik_ast::WatInstruction::I64GeS},
-            WatInstruction::I32GeU => quote! { tarnik_ast::WatInstruction::I32GeU},
-            WatInstruction::I64GeU => quote! { tarnik_ast::WatInstruction::I64GeU},
-            WatInstruction::F32Ge => quote! { tarnik_ast::WatInstruction::F32Ge},
-            WatInstruction::F64Ge => quote! { tarnik_ast::WatInstruction::F64Ge},
-            WatInstruction::I32GtS => quote! { tarnik_ast::WatInstruction::I32GtS},
-            WatInstruction::I64GtS => quote! { tarnik_ast::WatInstruction::I64GtS},
-            WatInstruction::I32GtU => quote! { tarnik_ast::WatInstruction::I32GtU},
-            WatInstruction::I64GtU => quote! { tarnik_ast::WatInstruction::I64GtU},
-            WatInstruction::F32Gt => quote! { tarnik_ast::WatInstruction::F32Gt},
-            WatInstruction::F64Gt => quote! { tarnik_ast::WatInstruction::F64Gt},
-            WatInstruction::I32ShlS => quote! { tarnik_ast::WatInstruction::I32ShlS},
-            WatInstruction::I64ShlS => quote! { tarnik_ast::WatInstruction::I64ShlS},
-            WatInstruction::I32ShlU => quote! { tarnik_ast::WatInstruction::I32ShlU},
-            WatInstruction::I64ShlU => quote! { tarnik_ast::WatInstruction::I64ShlU},
-            WatInstruction::I32ShrS => quote! { tarnik_ast::WatInstruction::I32ShrS},
-            WatInstruction::I64ShrS => quote! { tarnik_ast::WatInstruction::I64ShrS},
-            WatInstruction::I32ShrU => quote! { tarnik_ast::WatInstruction::I32ShrU},
-            WatInstruction::I64ShrU => quote! { tarnik_ast::WatInstruction::I64ShrU},
-            WatInstruction::F32Neg => quote! { tarnik_ast::WatInstruction::F32Neg },
-            WatInstruction::F64Neg => quote! { tarnik_ast::WatInstruction::F64Neg },
+            I32Add => quote! { #w::I32Add },
+            I64Add => quote! { #w::I64Add },
+            F32Add => quote! { #w::F32Add },
+            F64Add => quote! { #w::F64Add },
+            I32GeS => quote! { #w::I32GeS },
+            ArrayLen => quote! { #w::ArrayLen },
+            ArrayGet(name) => quote! { #w::ArrayGet(#name.to_string()) },
+            ArrayGetU(name) => quote! { #w::ArrayGetU(#name.to_string()) },
+            ArraySet(name) => quote! { #w::ArraySet(#name.to_string()) },
+            ArrayNewFixed(typeidx, n) => quote! { #w::ArrayNewFixed(#typeidx.to_string(), #n) },
+            I32Eq => quote! { #w::I32Eq },
+            I64Eq => quote! { #w::I64Eq },
+            F32Eq => quote! { #w::F32Eq },
+            F64Eq => quote! { #w::F64Eq },
+            I64ExtendI32S => quote! { #w::I64ExtendI32S },
+            I32WrapI64 => quote! { #w::I32WrapI64 },
+            I31GetS => quote! { #w::I31GetS },
+            F64PromoteF32 => quote! { #w::F64PromoteF32 },
+            F32DemoteF64 => quote! { #w::F32DemoteF64 },
+            I32Sub => quote! { #w::I32Sub },
+            I64Sub => quote! { #w::I64Sub },
+            F32Sub => quote! { #w::F32Sub },
+            F64Sub => quote! { #w::F64Sub },
+            I32Mul => quote! { #w::I32Mul },
+            I64Mul => quote! { #w::I64Mul },
+            F32Mul => quote! { #w::F32Mul },
+            F64Mul => quote! { #w::F64Mul },
+            I32DivS => quote! { #w::I32DivS },
+            I64DivS => quote! { #w::I64DivS },
+            I32DivU => quote! { #w::I32DivU },
+            I64DivU => quote! { #w::I64DivU },
+            F32Div => quote! { #w::F32Div },
+            F64Div => quote! { #w::F64Div },
+            I32RemS => quote! { #w::I32RemS },
+            I64RemS => quote! { #w::I64RemS },
+            I32RemU => quote! { #w::I32RemU },
+            I64RemU => quote! { #w::I64RemU },
+            I32And => quote! { #w::I32And },
+            I64And => quote! { #w::I64And },
+            I32Or => quote! { #w::I32Or },
+            I64Or => quote! { #w::I64Or },
+            I32Xor => quote! { #w::I32Xor },
+            I64Xor => quote! { #w::I64Xor },
+            I32Ne => quote! { #w::I32Ne },
+            I64Ne => quote! { #w::I64Ne },
+            F32Ne => quote! { #w::F32Ne},
+            F64Ne => quote! { #w::F64Ne},
+            I32LtS => quote! { #w::I32LtS},
+            I64LtS => quote! { #w::I64LtS},
+            I32LtU => quote! { #w::I32LtU},
+            I64LtU => quote! { #w::I64LtU},
+            F32Lt => quote! { #w::F32Lt},
+            F64Lt => quote! { #w::F64Lt},
+            I32LeS => quote! { #w::I32LeS},
+            I64LeS => quote! { #w::I64LeS},
+            I32LeU => quote! { #w::I32LeU},
+            I64LeU => quote! { #w::I64LeU},
+            F32Le => quote! { #w::F32Le},
+            F64Le => quote! { #w::F64Le},
+            I64GeS => quote! { #w::I64GeS},
+            I32GeU => quote! { #w::I32GeU},
+            I64GeU => quote! { #w::I64GeU},
+            F32Ge => quote! { #w::F32Ge},
+            F64Ge => quote! { #w::F64Ge},
+            I32GtS => quote! { #w::I32GtS},
+            I64GtS => quote! { #w::I64GtS},
+            I32GtU => quote! { #w::I32GtU},
+            I64GtU => quote! { #w::I64GtU},
+            F32Gt => quote! { #w::F32Gt},
+            F64Gt => quote! { #w::F64Gt},
+            I32ShlS => quote! { #w::I32ShlS},
+            I64ShlS => quote! { #w::I64ShlS},
+            I32ShlU => quote! { #w::I32ShlU},
+            I64ShlU => quote! { #w::I64ShlU},
+            I32ShrS => quote! { #w::I32ShrS},
+            I64ShrS => quote! { #w::I64ShrS},
+            I32ShrU => quote! { #w::I32ShrU},
+            I64ShrU => quote! { #w::I64ShrU},
+            F32Neg => quote! { #w::F32Neg },
+            F64Neg => quote! { #w::F64Neg },
+            I32Store(label) => quote! { #w::I32Store(#label.to_string()) },
+            I64Store(label) => quote! { #w::I64Store(#label.to_string()) },
+            F32Store(label) => quote! { #w::F32Store(#label.to_string()) },
+            F64Store(label) => quote! { #w::F64Store(#label.to_string()) },
+            I32Store8(label) => quote! { #w::I32Store8(#label.to_string()) },
+            I32Store16(label) => quote! { #w::I32Store16(#label.to_string()) },
+            I64Store8(label) => quote! { #w::I64Store8(#label.to_string()) },
+            I64Store16(label) => quote! { #w::I64Store16(#label.to_string()) },
+            I64Store32(label) => quote! { #w::I64Store32(#label.to_string()) },
+            I32Load(label) => quote! { #w::I32Load(#label.to_string()) },
+            I64Load(label) => quote! { #w::I64Load(#label.to_string()) },
+            F32Load(label) => quote! { #w::F32Load(#label.to_string()) },
+            F64Load(label) => quote! { #w::F64Load(#label.to_string()) },
+            I32Load8S(label) => quote! { #w::I32Load8S(#label.to_string()) },
+            I32Load8U(label) => quote! { #w::I32Load8U(#label.to_string()) },
+            I32Load16S(label) => quote! { #w::I32Load16S(#label.to_string()) },
+            I32Load16U(label) => quote! { #w::I32Load16U(#label.to_string()) },
+            I64Load8S(label) => quote! { #w::I64Load8S(#label.to_string()) },
+            I64Load8U(label) => quote! { #w::I64Load8U(#label.to_string()) },
+            I64Load16S(label) => quote! { #w::I64Load16S(#label.to_string()) },
+            I64Load16U(label) => quote! { #w::I64Load16U(#label.to_string()) },
+            I64Load32S(label) => quote! { #w::I64Load32S(#label.to_string()) },
+            I64Load32U(label) => quote! { #w::I64Load32U(#label.to_string()) },
         };
         tokens.extend(tokens_str);
     }
@@ -2161,7 +2283,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             }
         });
 
-    let tags =
+    let exports =
         global_scope
             .module
             .exports
@@ -2172,6 +2294,19 @@ pub fn wasm(input: TokenStream) -> TokenStream {
                 }
             });
 
+    let memories = global_scope
+        .module
+        .memories
+        .into_iter()
+        .map(|(label, (size, max_size_opt))| {
+            let max_size_q = match max_size_opt {
+                Some(max_size) => quote! { Some(#max_size) },
+                None => quote! { None },
+            };
+            quote! {
+                module.add_memory(#label, #size, #max_size_q);
+            }
+        });
     let functions = global_scope.functions.into_iter().map(|f| {
         let our = OurWatFunction(f.clone());
         quote! {
@@ -2189,9 +2324,13 @@ pub fn wasm(input: TokenStream) -> TokenStream {
 
             #(#types)*
 
+            #(#memories)*
+
             #(#tags)*
 
             #(#functions)*
+
+            #(#exports)*
 
             module
         }

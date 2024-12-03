@@ -349,6 +349,31 @@ pub enum WatInstruction {
     F64PromoteF32,
     F32DemoteF64,
 
+    I32Store(String),
+    I64Store(String),
+    F32Store(String),
+    F64Store(String),
+    I32Store8(String),
+    I32Store16(String),
+    I64Store8(String),
+    I64Store16(String),
+    I64Store32(String),
+
+    I32Load(String),
+    I64Load(String),
+    F32Load(String),
+    F64Load(String),
+    I32Load8S(String),
+    I32Load8U(String),
+    I32Load16S(String),
+    I32Load16U(String),
+    I64Load8S(String),
+    I64Load8U(String),
+    I64Load16S(String),
+    I64Load16U(String),
+    I64Load32S(String),
+    I64Load32U(String),
+
     StructNew(String),
     StructGet(String, String),
     StructSet(String, String),
@@ -637,6 +662,31 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32Xor => write!(f, "(i32.xor)"),
             WatInstruction::I64Xor => write!(f, "(i64.xor)"),
 
+            WatInstruction::I32Store(label) => write!(f, "(i32.store (memory {label}))"),
+            WatInstruction::I64Store(label) => write!(f, "(i64.store (memory {label}))"),
+            WatInstruction::F32Store(label) => write!(f, "(f32.store (memory {label}))"),
+            WatInstruction::F64Store(label) => write!(f, "(f64.store (memory {label}))"),
+            WatInstruction::I32Store8(label) => write!(f, "(i32.store8 (memory {label}))"),
+            WatInstruction::I32Store16(label) => write!(f, "(i32.store16 (memory {label}))"),
+            WatInstruction::I64Store8(label) => write!(f, "(i64.store8 (memory {label}))"),
+            WatInstruction::I64Store16(label) => write!(f, "(i64.store16 (memory {label}))"),
+            WatInstruction::I64Store32(label) => write!(f, "(i64.store32 (memory {label}))"),
+
+            WatInstruction::I32Load(label) => write!(f, "(i32.load (memory {label}))"),
+            WatInstruction::I64Load(label) => write!(f, "(i64.load (memory {label}))"),
+            WatInstruction::F32Load(label) => write!(f, "(f32.load (memory {label}))"),
+            WatInstruction::F64Load(label) => write!(f, "(f64.load (memory {label}))"),
+            WatInstruction::I32Load8S(label) => write!(f, "(i32.load8_s (memory {label}))"),
+            WatInstruction::I32Load8U(label) => write!(f, "(i32.load8_u (memory {label}))"),
+            WatInstruction::I32Load16S(label) => write!(f, "(i32.load16_s (memory {label}))"),
+            WatInstruction::I32Load16U(label) => write!(f, "(i32.load16_u (memory {label}))"),
+            WatInstruction::I64Load8S(label) => write!(f, "(i64.load8_s (memory {label}))"),
+            WatInstruction::I64Load8U(label) => write!(f, "(i64.load8_u (memory {label}))"),
+            WatInstruction::I64Load16S(label) => write!(f, "(i64.load16_s (memory {label}))"),
+            WatInstruction::I64Load16U(label) => write!(f, "(i64.load16_u (memory {label}))"),
+            WatInstruction::I64Load32S(label) => write!(f, "(i64.load32_s (memory {label}))"),
+            WatInstruction::I64Load32U(label) => write!(f, "(i64.load32_u (memory {label}))"),
+
             WatInstruction::Nop => Ok(()),
             WatInstruction::Local { name, r#type } => write!(f, "(local {} {})", name, r#type),
             WatInstruction::GlobalGet(name) => write!(f, "(global.get {})", name),
@@ -648,8 +698,6 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64Const(value) => write!(f, "(i64.const {})", value),
             WatInstruction::F32Const(value) => write!(f, "(f32.const {})", value),
             WatInstruction::F64Const(value) => write!(f, "(f64.const {})", value),
-
-            WatInstruction::I32GeS => writeln!(f, "(i32.ge_s)"),
 
             WatInstruction::StructNew(name) => write!(f, "(struct.new {})", name),
             WatInstruction::StructGet(name, field) => write!(f, "(struct.get {name} {field})"),
@@ -840,7 +888,7 @@ pub struct WatModule {
     pub functions: Vec<WatFunction>,
     // TODO: changet it to a struct
     pub exports: Vec<(String, String, String)>,
-    pub globals: Vec<(String, WasmType, WatInstruction)>,
+    pub globals: HashMap<String, (WasmType, WatInstruction)>,
     pub data: Vec<(usize, String)>,
     pub data_offset: usize,
     pub data_offsets: HashMap<String, usize>,
@@ -855,7 +903,7 @@ impl WatModule {
             imports: Vec::new(),
             functions: Vec::new(),
             exports: Vec::new(),
-            globals: Vec::new(),
+            globals: HashMap::new(),
             data: Vec::new(),
             data_offset: 100,
             data_offsets: HashMap::new(),
@@ -965,7 +1013,7 @@ impl fmt::Display for WatModule {
         }
 
         // Globals
-        for (name, type_, init) in &self.globals {
+        for (name, (type_, init)) in &self.globals {
             writeln!(f, "  (global ${} {} {})", name, type_, init)?;
         }
 
