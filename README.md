@@ -23,69 +23,60 @@ Yes, I am lazy.
 After adding the crate to a Rust project you can do the following:
 
 ```rust
-let module = tarnik::wasm! {
-  #[export("memory")]
-  memory!("memory", 1);
 
-  type String = [mut i8];
+fn main() {
+    let module: tarnik_ast::WatModule = tarnik::wasm! {
+        #[export("memory")]
+        memory!("memory", 1);
 
-  #[export("_start")]
-  fn run() {
-    let foo: String = "Hello world";
-    foo[1] = 'a';
+        #[import("wasi_snapshot_preview1", "fd_write")]
+        fn write(a1: i32, a2: i32, a3: i32, a4: i32) -> i32;
 
-    let sum: i32 = 0;
-    for byte in foo {
-      sum += byte;
-    }
-  }
-};
+        type ImmutableString = [i8];
 
-println!("{module}");
+        #[export("_start")]
+        fn run() {
+            let str: ImmutableString = "Hello world!";
+            let i: i32 = 100;
+            for c in str {
+                memory[i] = c;
+                i += 1;
+            }
+            // store io vectors
+            memory[0] = 100;
+            memory[4] = i;
+
+            // `let: foo`` is small hack, if a function returns a value it needs to be somehow consumed
+            let foo: i32 = write(
+                1, // stdout
+                0, // io vectors start
+                1, // number of io vectors
+                50, // where to write the result
+            );
+        }
+    };
+
+    println!("{module}");
+}
 ```
 
-The `wasm!` macro supports adding memory, and exporting memories, functions and types.
-Imports are not supported yet, but you can add imports by running the `add_import`
-method on the module:
-
-```rust
-let mut module: WatModule = wasm! {
-    #[export("memory")]
-    memory!("memory", 1);
-
-    #[export("_start")]
-    fn run() {
-        let x: i32 = 0;
-    }
-};
-
-module.add_import(
-    "console",
-    "log",
-    WasmType::func(vec![WasmType::I32, WasmType::I32], None),
-);
-
-println!("{module}");
-```
-
-This will result in the following WAT program:
+If you run such a program and save the output to a file:
 
 ```
-(module
-  (import "console" "log" (func (param i32) (param i32)))
+cargo run > hello.wat
+```
 
-  (memory $memory 1)
+And compile:
 
-  (elem declare func $run)
-  (func $run
-    (local $x i32)
-    (i32.const 0)
-    (local.set $x)
-  )
+```
+wasm-tools parse hello.wat -o hello.wasm
+```
 
-  (export "memory" (memory $memory))
-  (export "_start" (func $run))
-)
+You can run it with a runtime that supports WASM GC and WASIp1:
+
+```
+wasmedge run --enable-gc print.wasm
+Hello world!
 ```
 
 As this is an early version, a lot of expressions don't work correclty. I'll be

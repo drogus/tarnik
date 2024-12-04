@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::{self};
+use std::fmt::{self, Formatter};
 use std::str::FromStr;
 
 pub use indexmap::IndexMap;
@@ -41,7 +41,7 @@ impl fmt::Display for StructField {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Signature {
     pub params: Vec<WasmType>,
-    pub result: Option<Box<WasmType>>,
+    pub result: Option<WasmType>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -59,7 +59,10 @@ pub enum WasmType {
         ty: Box<WasmType>,
     },
     Struct(Vec<StructField>),
-    Func(Box<Signature>),
+    Func {
+        name: Option<String>,
+        signature: Box<Signature>,
+    },
     Tag {
         name: String,
         signature: Box<Signature>,
@@ -146,11 +149,11 @@ impl WasmType {
         }
     }
 
-    pub fn func(params: Vec<WasmType>, result: Option<WasmType>) -> WasmType {
-        WasmType::Func(Box::new(Signature {
-            params,
-            result: result.map(Box::new),
-        }))
+    pub fn func(name: Option<String>, params: Vec<WasmType>, result: Option<WasmType>) -> WasmType {
+        WasmType::Func {
+            name,
+            signature: Box::new(Signature { params, result }),
+        }
     }
 }
 
@@ -180,8 +183,9 @@ impl fmt::Display for WasmType {
                 }
                 write!(f, ")")
             }
-            WasmType::Func(signature) => {
-                write!(f, "(func")?;
+            WasmType::Func { name, signature } => {
+                let name = name.clone().unwrap_or_default();
+                write!(f, "(func {name}")?;
                 for param in &signature.params {
                     write!(f, " (param {param})")?;
                 }
@@ -372,30 +376,30 @@ pub enum WatInstruction {
     I32GetS,
     I32GetU,
 
-    I32Store(String),
-    I64Store(String),
-    F32Store(String),
-    F64Store(String),
-    I32Store8(String),
-    I32Store16(String),
-    I64Store8(String),
-    I64Store16(String),
-    I64Store32(String),
+    I32Store(Option<String>),
+    I64Store(Option<String>),
+    F32Store(Option<String>),
+    F64Store(Option<String>),
+    I32Store8(Option<String>),
+    I32Store16(Option<String>),
+    I64Store8(Option<String>),
+    I64Store16(Option<String>),
+    I64Store32(Option<String>),
 
-    I32Load(String),
-    I64Load(String),
-    F32Load(String),
-    F64Load(String),
-    I32Load8S(String),
-    I32Load8U(String),
-    I32Load16S(String),
-    I32Load16U(String),
-    I64Load8S(String),
-    I64Load8U(String),
-    I64Load16S(String),
-    I64Load16U(String),
-    I64Load32S(String),
-    I64Load32U(String),
+    I32Load(Option<String>),
+    I64Load(Option<String>),
+    F32Load(Option<String>),
+    F64Load(Option<String>),
+    I32Load8S(Option<String>),
+    I32Load8U(Option<String>),
+    I32Load16S(Option<String>),
+    I32Load16U(Option<String>),
+    I64Load8S(Option<String>),
+    I64Load8U(Option<String>),
+    I64Load16S(Option<String>),
+    I64Load16U(Option<String>),
+    I64Load32S(Option<String>),
+    I64Load32U(Option<String>),
 
     StructNew(String),
     StructGet(String, String),
@@ -686,30 +690,30 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32Xor => write!(f, "(i32.xor)"),
             WatInstruction::I64Xor => write!(f, "(i64.xor)"),
 
-            WatInstruction::I32Store(label) => write!(f, "(i32.store (memory {label}))"),
-            WatInstruction::I64Store(label) => write!(f, "(i64.store (memory {label}))"),
-            WatInstruction::F32Store(label) => write!(f, "(f32.store (memory {label}))"),
-            WatInstruction::F64Store(label) => write!(f, "(f64.store (memory {label}))"),
-            WatInstruction::I32Store8(label) => write!(f, "(i32.store8 (memory {label}))"),
-            WatInstruction::I32Store16(label) => write!(f, "(i32.store16 (memory {label}))"),
-            WatInstruction::I64Store8(label) => write!(f, "(i64.store8 (memory {label}))"),
-            WatInstruction::I64Store16(label) => write!(f, "(i64.store16 (memory {label}))"),
-            WatInstruction::I64Store32(label) => write!(f, "(i64.store32 (memory {label}))"),
+            WatInstruction::I32Store(label) => memory_op(f, "i32.store", label),
+            WatInstruction::I64Store(label) => memory_op(f, "i64.store", label),
+            WatInstruction::F32Store(label) => memory_op(f, "f32.store", label),
+            WatInstruction::F64Store(label) => memory_op(f, "f64.store", label),
+            WatInstruction::I32Store8(label) => memory_op(f, "i32.store8", label),
+            WatInstruction::I32Store16(label) => memory_op(f, "i32.store16", label),
+            WatInstruction::I64Store8(label) => memory_op(f, "i64.store8", label),
+            WatInstruction::I64Store16(label) => memory_op(f, "i64.store16", label),
+            WatInstruction::I64Store32(label) => memory_op(f, "i64.store32", label),
 
-            WatInstruction::I32Load(label) => write!(f, "(i32.load (memory {label}))"),
-            WatInstruction::I64Load(label) => write!(f, "(i64.load (memory {label}))"),
-            WatInstruction::F32Load(label) => write!(f, "(f32.load (memory {label}))"),
-            WatInstruction::F64Load(label) => write!(f, "(f64.load (memory {label}))"),
-            WatInstruction::I32Load8S(label) => write!(f, "(i32.load8_s (memory {label}))"),
-            WatInstruction::I32Load8U(label) => write!(f, "(i32.load8_u (memory {label}))"),
-            WatInstruction::I32Load16S(label) => write!(f, "(i32.load16_s (memory {label}))"),
-            WatInstruction::I32Load16U(label) => write!(f, "(i32.load16_u (memory {label}))"),
-            WatInstruction::I64Load8S(label) => write!(f, "(i64.load8_s (memory {label}))"),
-            WatInstruction::I64Load8U(label) => write!(f, "(i64.load8_u (memory {label}))"),
-            WatInstruction::I64Load16S(label) => write!(f, "(i64.load16_s (memory {label}))"),
-            WatInstruction::I64Load16U(label) => write!(f, "(i64.load16_u (memory {label}))"),
-            WatInstruction::I64Load32S(label) => write!(f, "(i64.load32_s (memory {label}))"),
-            WatInstruction::I64Load32U(label) => write!(f, "(i64.load32_u (memory {label}))"),
+            WatInstruction::I32Load(label) => memory_op(f, "i32.load", label),
+            WatInstruction::I64Load(label) => memory_op(f, "i64.load", label),
+            WatInstruction::F32Load(label) => memory_op(f, "f32.load", label),
+            WatInstruction::F64Load(label) => memory_op(f, "f64.load", label),
+            WatInstruction::I32Load8S(label) => memory_op(f, "i32.load8_s", label),
+            WatInstruction::I32Load8U(label) => memory_op(f, "i32.load8_u", label),
+            WatInstruction::I32Load16S(label) => memory_op(f, "i32.load16_s", label),
+            WatInstruction::I32Load16U(label) => memory_op(f, "i32.load16_u", label),
+            WatInstruction::I64Load8S(label) => memory_op(f, "i64.load8_s", label),
+            WatInstruction::I64Load8U(label) => memory_op(f, "i64.load8_u", label),
+            WatInstruction::I64Load16S(label) => memory_op(f, "i64.load16_s", label),
+            WatInstruction::I64Load16U(label) => memory_op(f, "i64.load16_u", label),
+            WatInstruction::I64Load32S(label) => memory_op(f, "i64.load32_s", label),
+            WatInstruction::I64Load32U(label) => memory_op(f, "i64.load32_u", label),
 
             WatInstruction::Nop => Ok(()),
             WatInstruction::Local { name, r#type } => write!(f, "(local {} {})", name, r#type),
@@ -1017,11 +1021,6 @@ impl WatModule {
 impl fmt::Display for WatModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "(module")?;
-        // Types
-        for (name, ty) in &self.types {
-            writeln!(f, "  (type {name} {ty})")?;
-        }
-
         // Tags
         for (label, typeidx) in &self.tags {
             writeln!(f, "  (tag {label} (type {typeidx}))")?;
@@ -1040,6 +1039,11 @@ impl fmt::Display for WatModule {
                 "".into()
             };
             writeln!(f, "  (memory {label} {size} {max_size})")?;
+        }
+
+        // Types
+        for (name, ty) in &self.types {
+            writeln!(f, "  (type {name} {ty})")?;
         }
 
         // Data
@@ -1084,4 +1088,12 @@ impl fmt::Display for WatModule {
 
         Ok(())
     }
+}
+
+fn memory_op(f: &mut Formatter<'_>, instr: &str, _label: &Option<String>) -> fmt::Result {
+    // if let Some(label) = label {
+    //     write!(f, "({instr} (memory {label})")
+    // } else {
+    write!(f, "({instr})")
+    // }
 }

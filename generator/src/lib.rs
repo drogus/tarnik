@@ -6,7 +6,7 @@ use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
-    token::{self, Semi},
+    token::{self, Brace, Semi},
     Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Meta, Pat, PatType, Type,
 };
 
@@ -15,7 +15,7 @@ extern crate proc_macro2;
 extern crate quote;
 extern crate syn;
 
-use proc_macro2::{Literal, TokenStream as TokenStream2};
+use proc_macro2::{Literal, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
@@ -31,8 +31,7 @@ struct Parameter {
 struct Function {
     name: String,
     parameters: Vec<Parameter>,
-    #[allow(dead_code)]
-    return_type: Option<String>,
+    return_type: Option<WasmType>,
     body: Vec<Stmt>,
 }
 
@@ -48,15 +47,32 @@ impl Parse for GlobalScope {
         let mut functions = Vec::new();
         let mut types = IndexMap::new();
         let mut export_next: Option<String> = None;
+        let mut import_next: Option<(String, String)> = None;
 
         let mut module = WatModule::new();
 
         while !input.is_empty() {
             if input.peek(Token![fn]) {
-                let function = parse_function(&mut input, &mut functions)?;
+                let function = parse_function(&mut input)?;
+
                 if let Some(export_name) = export_next {
                     module.add_export(export_name, "func", format!("${}", function.name));
                     export_next = None;
+
+                    functions.push(function);
+                } else if let Some((namespace, name)) = import_next {
+                    module.add_import(
+                        namespace,
+                        name,
+                        WasmType::func(
+                            Some(format!("${}", function.name)),
+                            function.parameters.iter().map(|p| p.ty.clone()).collect(),
+                            function.return_type.clone(),
+                        ),
+                    );
+                    import_next = None;
+                } else {
+                    functions.push(function);
                 }
             } else if input.peek(Token![type]) {
                 let (name, ty) = parse_type_def(&mut input)?;
@@ -96,10 +112,30 @@ impl Parse for GlobalScope {
                             "Export macro accepts only a string literal as an argument",
                         ));
                     }
+                } else if name == "import" {
+                    if let Meta::List(list) = &attrs[0].meta {
+                        let tokens = list.tokens.clone();
+
+                        let literals = ::syn::parse::Parser::parse2(
+                            Punctuated::<Literal, Token![,]>::parse_terminated,
+                            tokens,
+                        )?;
+
+                        // TODO: is there a better way to extract it?
+                        import_next = Some((
+                            literals[0].to_string().trim_matches('"').to_string(),
+                            literals[1].to_string().trim_matches('"').to_string(),
+                        ));
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            &attrs[0].meta,
+                            "Export macro accepts only a string literal as an argument",
+                        ));
+                    }
                 } else {
                     return Err(syn::Error::new_spanned(
                         ident,
-                        "Only export macro is supported at the moment",
+                        "{name} attribute macro doesn't exist",
                     ));
                 }
             } else if input.peek(syn::Ident) && input.peek2(Token![!]) {
@@ -214,6 +250,7 @@ impl Parse for GlobalScope {
                 translate_statement(&mut module, &mut wat_function, &mut instructions, stmt)?;
             }
             wat_function.body = instructions.into_iter().map(Box::new).collect();
+            wat_function.return_type = f.return_type;
             wat_functions.push(wat_function);
         }
 
@@ -348,10 +385,7 @@ fn parse_type_def(input: &mut ParseStream) -> Result<(String, WasmType)> {
     Ok((format!("${ident}"), ty))
 }
 
-fn parse_function<'f>(
-    input: &mut ParseStream,
-    functions: &'f mut Vec<Function>,
-) -> Result<&'f Function> {
+fn parse_function(input: &mut ParseStream) -> Result<Function> {
     let _: Token![fn] = input.parse()?;
     let name: Ident = input.parse()?;
 
@@ -376,24 +410,28 @@ fn parse_function<'f>(
 
     let return_type = if input.peek(Token![->]) {
         let _: Token![->] = input.parse()?;
-        let ty: Ident = input.parse()?;
-        Some(ty.to_string())
+        Some(parse_type(input)?)
     } else {
         None
     };
+    let mut body: Vec<Stmt> = Vec::new();
 
-    let content;
-    braced!(content in input);
-    let body: Vec<Stmt> = content.call(syn::Block::parse_within)?;
+    if input.peek(Brace) {
+        let content;
+        braced!(content in input);
+        body = content.call(syn::Block::parse_within)?;
+    } else {
+        let _: Token![;] = input.parse()?;
+    }
 
-    functions.push(Function {
+    let f = Function {
         name: name.to_string(),
         parameters,
         return_type,
         body,
-    });
+    };
 
-    Ok(functions.last().unwrap())
+    Ok(f)
 }
 
 fn translate_unary(
@@ -1172,8 +1210,12 @@ fn translate_for_loop(
     }
 
     let element_type = get_element_type(module, function, &array_type).unwrap();
-
-    function.add_local_exact(&var_name, element_type.clone());
+    let current_type = if element_type == WasmType::I8 {
+        WasmType::I32
+    } else {
+        element_type.clone()
+    };
+    function.add_local_exact(&var_name, current_type);
 
     instructions.push(WatInstruction::local_get(&for_target_local));
     instructions.push(WatInstruction::local_get(&i_local));
@@ -1389,12 +1431,16 @@ fn translate_expression(
                                 match ty {
                                     Some(WasmType::I32) => {
                                         current_block
-                                            .push(WatInstruction::I32Store(target_name.into()));
+                                            .push(WatInstruction::I32Store(Some(target_name)));
                                     }
-                                    Some(_) => {
-                                        panic!("bar");
+                                    Some(WasmType::I8) => {
+                                        current_block
+                                            .push(WatInstruction::I32Store8(Some(target_name)));
                                     }
-                                    None => panic!("Foo"),
+                                    Some(t) => {
+                                        todo!("memory access with type {t} not implemented");
+                                    }
+                                    None => panic!("type has to be known for memory access"),
                                 }
                             }
                         }
@@ -1512,7 +1558,7 @@ fn translate_expression(
                     // TODO: handle memories here
                     if let Expr::Path(path_expr) = binary.left.deref() {
                         let name = path_expr.path.segments[0].ident.to_string();
-                        current_block.push(WatInstruction::local_set(name));
+                        current_block.push(WatInstruction::local_set(format!("${name}")));
                     } else {
                         return Err(syn::Error::new_spanned(
                             binary,
@@ -1715,7 +1761,7 @@ fn translate_expression(
                     },
                     WasmType::Array { .. } => todo!("as array"),
                     WasmType::Struct(_) => todo!("as struct"),
-                    WasmType::Func(_) => todo!("as func"),
+                    WasmType::Func { .. } => todo!("as func"),
                     WasmType::Tag { .. } => todo!("as tag"),
                 }
             } else {
@@ -1938,9 +1984,14 @@ impl ToTokens for OurWasmType {
                     tarnik_ast::WasmType::Struct(vec![#(#fields),*])
                 }
             }
-            WasmType::Func(signature) => {
+            WasmType::Func { name, signature } => {
+                let name = if let Some(name) = &name {
+                    quote! { Some(#name.to_string()) }
+                } else {
+                    quote! { None }
+                };
                 let result = if let Some(result) = &signature.result {
-                    let result = OurWasmType(result.deref().clone());
+                    let result = OurWasmType(result.clone());
                     quote! { Some(#result) }
                 } else {
                     quote! { None }
@@ -1952,12 +2003,15 @@ impl ToTokens for OurWasmType {
                 });
 
                 quote! {
-                    tarnik_ast::WasmType::Func(Box::new(tarnik_ast::Signature { params: vec![#(#params),*], result: #result }))
+                    tarnik_ast::WasmType::Func {
+                        name: #name,
+                        signature: Box::new(tarnik_ast::Signature { params: vec![#(#params),*], result: #result })
+                    }
                 }
             }
             WasmType::Tag { name, signature } => {
                 let result = if let Some(result) = &signature.result {
-                    let result = OurWasmType(result.deref().clone());
+                    let result = OurWasmType(result.clone());
                     quote! { Some(#result) }
                 } else {
                     quote! { None }
@@ -1975,6 +2029,16 @@ impl ToTokens for OurWasmType {
         };
         tokens.extend(tokens_str);
     }
+}
+
+fn quote_memory_op(name: &str, label: &Option<String>) -> proc_macro2::TokenStream {
+    let ident = Ident::new(name, Span::call_site());
+    let label_q = if let Some(label) = label {
+        quote! { Some(#label.to_string()) }
+    } else {
+        quote! { None }
+    };
+    quote! { tarnik_ast::WatInstruction::#ident(#label_q) }
 }
 
 impl ToTokens for OurWatInstruction {
@@ -2170,29 +2234,29 @@ impl ToTokens for OurWatInstruction {
             I64ShrU => quote! { #w::I64ShrU},
             F32Neg => quote! { #w::F32Neg },
             F64Neg => quote! { #w::F64Neg },
-            I32Store(label) => quote! { #w::I32Store(#label.to_string()) },
-            I64Store(label) => quote! { #w::I64Store(#label.to_string()) },
-            F32Store(label) => quote! { #w::F32Store(#label.to_string()) },
-            F64Store(label) => quote! { #w::F64Store(#label.to_string()) },
-            I32Store8(label) => quote! { #w::I32Store8(#label.to_string()) },
-            I32Store16(label) => quote! { #w::I32Store16(#label.to_string()) },
-            I64Store8(label) => quote! { #w::I64Store8(#label.to_string()) },
-            I64Store16(label) => quote! { #w::I64Store16(#label.to_string()) },
-            I64Store32(label) => quote! { #w::I64Store32(#label.to_string()) },
-            I32Load(label) => quote! { #w::I32Load(#label.to_string()) },
-            I64Load(label) => quote! { #w::I64Load(#label.to_string()) },
-            F32Load(label) => quote! { #w::F32Load(#label.to_string()) },
-            F64Load(label) => quote! { #w::F64Load(#label.to_string()) },
-            I32Load8S(label) => quote! { #w::I32Load8S(#label.to_string()) },
-            I32Load8U(label) => quote! { #w::I32Load8U(#label.to_string()) },
-            I32Load16S(label) => quote! { #w::I32Load16S(#label.to_string()) },
-            I32Load16U(label) => quote! { #w::I32Load16U(#label.to_string()) },
-            I64Load8S(label) => quote! { #w::I64Load8S(#label.to_string()) },
-            I64Load8U(label) => quote! { #w::I64Load8U(#label.to_string()) },
-            I64Load16S(label) => quote! { #w::I64Load16S(#label.to_string()) },
-            I64Load16U(label) => quote! { #w::I64Load16U(#label.to_string()) },
-            I64Load32S(label) => quote! { #w::I64Load32S(#label.to_string()) },
-            I64Load32U(label) => quote! { #w::I64Load32U(#label.to_string()) },
+            I32Store(label) => quote_memory_op("I32Store", label),
+            I64Store(label) => quote_memory_op("I64Store", label),
+            F32Store(label) => quote_memory_op("F32Store", label),
+            F64Store(label) => quote_memory_op("F64Store", label),
+            I32Store8(label) => quote_memory_op("I32Store8", label),
+            I32Store16(label) => quote_memory_op("I32Store16", label),
+            I64Store8(label) => quote_memory_op("I64Store8", label),
+            I64Store16(label) => quote_memory_op("I64Store16", label),
+            I64Store32(label) => quote_memory_op("I64Store32", label),
+            I32Load(label) => quote_memory_op("I32Load", label),
+            I64Load(label) => quote_memory_op("I64Load", label),
+            F32Load(label) => quote_memory_op("F32Load", label),
+            F64Load(label) => quote_memory_op("F64Load", label),
+            I32Load8S(label) => quote_memory_op("I32Load8S", label),
+            I32Load8U(label) => quote_memory_op("I32Load8U", label),
+            I32Load16S(label) => quote_memory_op("I32Load16S", label),
+            I32Load16U(label) => quote_memory_op("I32Load16U", label),
+            I64Load8S(label) => quote_memory_op("I64Load8S", label),
+            I64Load8U(label) => quote_memory_op("I64Load8U", label),
+            I64Load16S(label) => quote_memory_op("I64Load16S", label),
+            I64Load16U(label) => quote_memory_op("I64Load16U", label),
+            I64Load32S(label) => quote_memory_op("I64Load32S", label),
+            I64Load32U(label) => quote_memory_op("I64Load32U", label),
             F32ConvertI32S => quote! { #w::F32ConvertI32S },
             F32ConvertI32U => quote! { #w::F32ConvertI32U },
             F32ConvertI64S => quote! { #w::F32ConvertI64S },
@@ -2474,6 +2538,17 @@ pub fn wasm(input: TokenStream) -> TokenStream {
                 }
             });
 
+    let imports = global_scope
+        .module
+        .imports
+        .into_iter()
+        .map(|(namespace, name, ty)| {
+            let ty = OurWasmType(ty);
+            quote! {
+                module.add_import(#namespace, #name, #ty);
+            }
+        });
+
     let memories = global_scope
         .module
         .memories
@@ -2499,6 +2574,8 @@ pub fn wasm(input: TokenStream) -> TokenStream {
     let output = quote! {
         {
             let mut module = tarnik_ast::WatModule::new();
+
+            #(#imports)*
 
             #(#data)*
 
