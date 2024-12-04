@@ -495,12 +495,8 @@ impl WatInstruction {
         Self::StructSet(name.into(), field_name.into())
     }
 
-    pub fn array_new(
-        name: impl Into<String>,
-        _init: Box<WatInstruction>,
-        _length: Box<WatInstruction>,
-    ) -> Box<Self> {
-        Box::new(Self::ArrayNew(name.into()))
+    pub fn array_new(name: impl Into<String>) -> Self {
+        Self::ArrayNew(name.into())
     }
 
     pub fn array_get(name: impl Into<String>) -> Self {

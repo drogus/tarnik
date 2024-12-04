@@ -1899,7 +1899,39 @@ fn translate_expression(
         Expr::Range(_) => todo!("translate_expression: Expr::Range(_) "),
         Expr::RawAddr(_) => todo!("translate_expression: Expr::RawAddr(_) "),
         Expr::Reference(_) => todo!("translate_expression: Expr::Reference(_) "),
-        Expr::Repeat(_) => todo!("translate_expression: Expr::Repeat(_) "),
+        Expr::Repeat(expr_repeat) => {
+            if let Some(WasmType::Ref(typeidx, _)) = ty {
+                // apparently array.new_fixed can fail if the array is over 10k elements
+                // https://github.com/dart-lang/sdk/issues/55873
+                // not a huge concern for now, but it might be nice to do a check and change
+                // strategy based on the elements size
+                let elem_type = get_element_type(module, function, typeidx)
+                    .map_err(|_| anyhow!("Type needs to be known for a literal"))
+                    .unwrap();
+                // for elem in &expr_array.elems {
+
+                // }
+                translate_expression(
+                    module,
+                    function,
+                    current_block,
+                    expr_repeat.expr.deref(),
+                    None,
+                    Some(&elem_type),
+                )?;
+                translate_expression(
+                    module,
+                    function,
+                    current_block,
+                    expr_repeat.len.deref(),
+                    None,
+                    Some(&WasmType::I32),
+                )?;
+                current_block.push(WatInstruction::array_new(typeidx.to_string()));
+            } else {
+                panic!("Could not get the type for array literal, type we got: {ty:?}");
+            }
+        }
         Expr::Return(ret) => {
             if let Some(expr) = &ret.expr {
                 translate_expression(module, function, current_block, expr, None, None)?;
@@ -2076,9 +2108,7 @@ impl ToTokens for OurWatInstruction {
             StructSet(type_name, field_name) => {
                 quote! { #w::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
-            ArrayNew(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::ArrayNew(_) ")
-            }
+            ArrayNew(typeidx) => quote! { #w::ArrayNew(#typeidx.to_string()) },
             RefNull(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefNull(_) ")
             }
