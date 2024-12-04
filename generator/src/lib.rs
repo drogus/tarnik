@@ -992,6 +992,25 @@ fn get_type(
             WatInstruction::I64Load16U(_) => Some(WasmType::I64),
             WatInstruction::I64Load32S(_) => Some(WasmType::I64),
             WatInstruction::I64Load32U(_) => Some(WasmType::I64),
+            WatInstruction::F32ConvertI32S => Some(WasmType::F32),
+            WatInstruction::F32ConvertI32U => Some(WasmType::F32),
+            WatInstruction::F32ConvertI64S => Some(WasmType::F32),
+            WatInstruction::F32ConvertI64U => Some(WasmType::F32),
+            WatInstruction::F64ConvertI32S => Some(WasmType::F64),
+            WatInstruction::F64ConvertI32U => Some(WasmType::F64),
+            WatInstruction::F64ConvertI64S => Some(WasmType::F64),
+            WatInstruction::F64ConvertI64U => Some(WasmType::F64),
+            WatInstruction::I32TruncF32S => Some(WasmType::I32),
+            WatInstruction::I32TruncF32U => Some(WasmType::I32),
+            WatInstruction::I32TruncF64S => Some(WasmType::I32),
+            WatInstruction::I32TruncF64U => Some(WasmType::I32),
+            WatInstruction::I64TruncF32S => Some(WasmType::I64),
+            WatInstruction::I64TruncF32U => Some(WasmType::I64),
+            WatInstruction::I64TruncF64S => Some(WasmType::I64),
+            WatInstruction::I64TruncF64U => Some(WasmType::I64),
+            WatInstruction::I32GetS => Some(WasmType::I32),
+            WatInstruction::I32GetU => Some(WasmType::I32),
+            WatInstruction::RefCast(ty) => Some(ty.clone()),
         })
         .flatten()
 }
@@ -1568,7 +1587,144 @@ fn translate_expression(
                 panic!("Only calling functions by path is supported at the moment");
             }
         }
-        Expr::Cast(_) => todo!("translate_expression: Expr::Cast(_) "),
+        Expr::Cast(expr_cast) => {
+            translate_expression(
+                module,
+                function,
+                current_block,
+                expr_cast.expr.deref(),
+                None,
+                ty,
+            )?;
+
+            let last_ty_opt = get_type(module, function, current_block);
+            if let Some(last_ty) = last_ty_opt {
+                let target_type = translate_type(expr_cast.ty.deref())
+                    .ok_or(syn::Error::new_spanned(&expr_cast.ty, "Uknown type"))?;
+
+                match last_ty {
+                    WasmType::I32 => match target_type {
+                        WasmType::I32 => {}
+                        WasmType::I64 => current_block.push(WatInstruction::I64ExtendI32S),
+                        WasmType::F32 => current_block.push(WatInstruction::F32ConvertI32S),
+                        WasmType::F64 => current_block.push(WatInstruction::F64ConvertI32S),
+                        WasmType::I31Ref => {
+                            current_block.push(WatInstruction::RefI31);
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between i32 and {t}"),
+                            ));
+                        }
+                    },
+                    WasmType::I64 => match target_type {
+                        WasmType::I32 => current_block.push(WatInstruction::I32WrapI64),
+                        WasmType::I64 => {}
+                        WasmType::F32 => current_block.push(WatInstruction::F32ConvertI64S),
+                        WasmType::F64 => current_block.push(WatInstruction::F64ConvertI64S),
+                        WasmType::I31Ref => {
+                            current_block.push(WatInstruction::I32WrapI64);
+                            current_block.push(WatInstruction::RefI31);
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between i32 and {t}"),
+                            ));
+                        }
+                    },
+                    WasmType::F32 => match target_type {
+                        WasmType::I32 => current_block.push(WatInstruction::I32TruncF32S),
+                        WasmType::I64 => current_block.push(WatInstruction::I64TruncF32S),
+                        WasmType::F32 => {}
+                        WasmType::F64 => current_block.push(WatInstruction::F64PromoteF32),
+                        WasmType::I31Ref => {
+                            current_block.push(WatInstruction::I32TruncF32S);
+                            current_block.push(WatInstruction::RefI31);
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between f32 and {t}"),
+                            ));
+                        }
+                    },
+                    WasmType::F64 => match target_type {
+                        WasmType::I32 => current_block.push(WatInstruction::I32TruncF64S),
+                        WasmType::I64 => current_block.push(WatInstruction::I64TruncF64S),
+                        WasmType::F32 => current_block.push(WatInstruction::F32DemoteF64),
+                        WasmType::F64 => {}
+                        WasmType::I31Ref => {
+                            current_block.push(WatInstruction::I32TruncF64S);
+                            current_block.push(WatInstruction::RefI31);
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between f32 and {t}"),
+                            ));
+                        }
+                    },
+                    // this should never happen?
+                    WasmType::I8 => todo!("convert i8"),
+                    WasmType::I31Ref => match target_type {
+                        WasmType::I32 => current_block.push(WatInstruction::I32GetS),
+                        WasmType::I64 => {
+                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::I64ExtendI32S);
+                        }
+                        WasmType::F32 => {
+                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::F32ConvertI32S);
+                        }
+                        WasmType::F64 => {
+                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::F64ConvertI32S);
+                        }
+                        WasmType::I31Ref => {}
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between i31ref and {t}"),
+                            ));
+                        }
+                    },
+                    WasmType::Anyref => todo!("as anyref"),
+                    WasmType::Ref(name, nullable) => match &target_type {
+                        WasmType::Ref(to_name, to_nullable) => {
+                            if &name != to_name {
+                                return Err(syn::Error::new_spanned(
+                                    &expr_cast.expr,
+                                    format!("Can't convert between ref {name} and ref {to_name}"),
+                                ));
+                            }
+
+                            // we have to convert only if the type names match, but nullable
+                            // doesn't
+                            if &nullable != to_nullable {
+                                current_block.push(WatInstruction::RefCast(target_type));
+                            }
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between ref {name} and {t}"),
+                            ));
+                        }
+                    },
+                    WasmType::Array { .. } => todo!("as array"),
+                    WasmType::Struct(_) => todo!("as struct"),
+                    WasmType::Func(_) => todo!("as func"),
+                    WasmType::Tag { .. } => todo!("as tag"),
+                }
+            } else {
+                return Err(syn::Error::new_spanned(
+                    &expr_cast.expr,
+                    "Couldn't determine the type to be cast",
+                ));
+            }
+        }
         Expr::Closure(_) => todo!("translate_expression: Expr::Closure(_) "),
         Expr::Const(_) => todo!("translate_expression: Expr::Const(_) "),
         Expr::Continue(_) => todo!("translate_expression: Expr::Continue(_) "),
@@ -2037,6 +2193,30 @@ impl ToTokens for OurWatInstruction {
             I64Load16U(label) => quote! { #w::I64Load16U(#label.to_string()) },
             I64Load32S(label) => quote! { #w::I64Load32S(#label.to_string()) },
             I64Load32U(label) => quote! { #w::I64Load32U(#label.to_string()) },
+            F32ConvertI32S => quote! { #w::F32ConvertI32S },
+            F32ConvertI32U => quote! { #w::F32ConvertI32U },
+            F32ConvertI64S => quote! { #w::F32ConvertI64S },
+            F32ConvertI64U => quote! { #w::F32ConvertI64U },
+            F64ConvertI32S => quote! { #w::F64ConvertI32S },
+            F64ConvertI32U => quote! { #w::F64ConvertI32U },
+            F64ConvertI64S => quote! { #w::F64ConvertI64S },
+            F64ConvertI64U => quote! { #w::F64ConvertI64U },
+            I32TruncF32S => quote! { #w::I32TruncF32S },
+            I32TruncF32U => quote! { #w::I32TruncF32U },
+            I32TruncF64S => quote! { #w::I32TruncF64S },
+            I32TruncF64U => quote! { #w::I32TruncF64U },
+            I64TruncF32S => quote! { #w::I64TruncF32S },
+            I64TruncF32U => quote! { #w::I64TruncF32U },
+            I64TruncF64S => quote! { #w::I64TruncF64S },
+            I64TruncF64U => quote! { #w::I64TruncF64U },
+            I32GetS => quote! { #w::I32GetS },
+            I32GetU => quote! { #w::I32GetU },
+            RefCast(ty) => {
+                let ty = OurWasmType(ty.clone());
+                quote! {
+                    #w::RefCast(#ty)
+                }
+            }
         };
         tokens.extend(tokens_str);
     }

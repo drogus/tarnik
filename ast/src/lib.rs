@@ -349,6 +349,29 @@ pub enum WatInstruction {
     F64PromoteF32,
     F32DemoteF64,
 
+    F32ConvertI32S,
+    F32ConvertI32U,
+    F32ConvertI64S,
+    F32ConvertI64U,
+
+    F64ConvertI32S,
+    F64ConvertI32U,
+    F64ConvertI64S,
+    F64ConvertI64U,
+
+    I32TruncF32S,
+    I32TruncF32U,
+    I32TruncF64S,
+    I32TruncF64U,
+
+    I64TruncF32S,
+    I64TruncF32U,
+    I64TruncF64S,
+    I64TruncF64U,
+
+    I32GetS,
+    I32GetU,
+
     I32Store(String),
     I64Store(String),
     F32Store(String),
@@ -386,6 +409,7 @@ pub enum WatInstruction {
     RefNull(WasmType),
     Ref(String),
     RefFunc(String),
+    RefCast(WasmType),
     Type(String),
     Return,
     ReturnCall(String),
@@ -806,6 +830,30 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64Ne => writeln!(f, "(i64.ne)"),
             WatInstruction::F32Ne => writeln!(f, "(f32.ne)"),
             WatInstruction::F64Ne => writeln!(f, "(f64.ne)"),
+
+            WatInstruction::F32ConvertI32S => writeln!(f, "(f32.convert_i32_s)"),
+            WatInstruction::F32ConvertI32U => writeln!(f, "(f32.convert_i32_u)"),
+            WatInstruction::F32ConvertI64S => writeln!(f, "(f64.convert_i64_s)"),
+            WatInstruction::F32ConvertI64U => writeln!(f, "(f64.convert_i64_u)"),
+
+            WatInstruction::F64ConvertI32S => writeln!(f, "(f32.convert_i32_s)"),
+            WatInstruction::F64ConvertI32U => writeln!(f, "(f32.convert_i32_u)"),
+            WatInstruction::F64ConvertI64S => writeln!(f, "(f64.convert_i64_s)"),
+            WatInstruction::F64ConvertI64U => writeln!(f, "(f64.convert_i64_u)"),
+
+            WatInstruction::I32TruncF32S => writeln!(f, "(i32.truc_f32_s)"),
+            WatInstruction::I32TruncF32U => writeln!(f, "(i32.truc_f32_u)"),
+            WatInstruction::I32TruncF64S => writeln!(f, "(i32.truc_f64_s)"),
+            WatInstruction::I32TruncF64U => writeln!(f, "(i32.truc_f64_u)"),
+
+            WatInstruction::I64TruncF32S => writeln!(f, "(i64.truc_f32_s)"),
+            WatInstruction::I64TruncF32U => writeln!(f, "(i64.truc_f32_u)"),
+            WatInstruction::I64TruncF64S => writeln!(f, "(i64.truc_f64_s)"),
+            WatInstruction::I64TruncF64U => writeln!(f, "(i64.truc_f64_u)"),
+
+            WatInstruction::I32GetS => writeln!(f, "(i32.get_s)"),
+            WatInstruction::I32GetU => writeln!(f, "(i32.get_u)"),
+            WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
         }
     }
 }

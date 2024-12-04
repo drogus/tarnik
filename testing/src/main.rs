@@ -6,12 +6,14 @@ fn main() {
         #[export("memory")]
         memory!("memory", 1);
 
+        type Foo = [i32];
+
         #[export("_start")]
         fn run() {
-            let x: i32 = 0;
-            x += 1;
-            memory[0] = 'a';
-            let y: i32 = memory[10];
+            let x: Nullable<Foo> = [0, 1, 2];
+            let y: Foo = x as Foo;
+            let a: i32 = 0;
+            let b: i64 = a as i64;
         }
     };
 
