@@ -19,7 +19,7 @@ use proc_macro2::{Literal, Span, TokenStream as TokenStream2};
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
-use tarnik_ast::{StructField, WasmType, WatFunction, WatInstruction, WatModule};
+use tarnik_ast::{InstructionsList, StructField, WasmType, WatFunction, WatInstruction, WatModule};
 
 #[derive(Debug, Clone)]
 struct Parameter {
@@ -249,8 +249,12 @@ impl Parse for GlobalScope {
             for stmt in &f.body {
                 translate_statement(&mut module, &mut wat_function, &mut instructions, stmt)?;
             }
-            wat_function.body = instructions.into_iter().map(Box::new).collect();
-            wat_function.return_type = f.return_type;
+            wat_function.body = instructions.into();
+            wat_function.results = if let Some(result) = f.return_type {
+                vec![result]
+            } else {
+                vec![]
+            };
             wat_functions.push(wat_function);
         }
 
@@ -437,7 +441,7 @@ fn parse_function(input: &mut ParseStream) -> Result<Function> {
 fn translate_unary(
     module: &mut WatModule,
     function: &mut WatFunction,
-    current_block: &mut Vec<WatInstruction>,
+    current_block: &mut InstructionsList,
     expr: &Expr,
     expr_unary: &ExprUnary,
     ty: Option<&WasmType>,
@@ -493,10 +497,10 @@ fn translate_unary(
 fn translate_binary(
     module: &mut WatModule,
     function: &mut WatFunction,
-    current_block: &mut Vec<WatInstruction>,
+    current_block: &mut InstructionsList,
     binary: &ExprBinary,
-    left_instructions: &mut Vec<WatInstruction>,
-    right_instructions: &mut Vec<WatInstruction>,
+    left_instructions: &mut InstructionsList,
+    right_instructions: &mut InstructionsList,
 ) -> Result<()> {
     let left_ty = get_type(module, function, left_instructions);
     let right_ty = get_type(module, function, right_instructions);
@@ -1182,7 +1186,7 @@ fn get_element_type(
 fn translate_for_loop(
     module: &mut WatModule,
     function: &mut WatFunction,
-    block: &mut Vec<WatInstruction>,
+    block: &mut InstructionsList,
     for_loop_expr: &ExprForLoop,
 ) -> Result<()> {
     let var_name = format!("${}", extract_name_from_pattern(for_loop_expr.pat.deref()));
@@ -1253,7 +1257,7 @@ fn translate_for_loop(
 fn translate_lit(
     _module: &mut WatModule,
     _function: &mut WatFunction,
-    current_block: &mut Vec<WatInstruction>,
+    current_block: &mut InstructionsList,
     lit: &syn::Lit,
     ty: Option<&WasmType>,
 ) -> Result<()> {
@@ -1267,7 +1271,7 @@ fn translate_lit(
                     "string literal may only be assigned to an i8 array",
                 ));
             };
-            let mut instructions: Vec<WatInstruction> = lit_str
+            let mut instructions: InstructionsList = lit_str
                 .value()
                 .as_bytes()
                 .iter()
@@ -1337,7 +1341,7 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
 fn translate_expression(
     module: &mut WatModule,
     function: &mut WatFunction,
-    current_block: &mut Vec<WatInstruction>,
+    current_block: &mut InstructionsList,
     expr: &Expr,
     _: Option<Semi>,
     ty: Option<&WasmType>,
@@ -2329,7 +2333,7 @@ impl ToTokens for OurWatFunction {
         });
 
         let instructions = wat_function.body.iter().map(|i| {
-            let instruction = OurWatInstruction(*i.clone());
+            let instruction = OurWatInstruction(i.clone());
             quote! { function.add_instruction(#instruction) }
         });
 
@@ -2462,7 +2466,7 @@ fn translate_pat_type(
 fn translate_statement(
     module: &mut WatModule,
     function: &mut WatFunction,
-    instructions: &mut Vec<WatInstruction>,
+    instructions: &mut InstructionsList,
     stmt: &Stmt,
 ) -> Result<()> {
     match stmt {

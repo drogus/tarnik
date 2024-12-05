@@ -1,8 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::{self, Formatter};
 use std::str::FromStr;
 
 pub use indexmap::IndexMap;
+
+pub type InstructionsList = Vec<WatInstruction>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Nullable {
@@ -129,7 +131,7 @@ impl WasmType {
         }
     }
 
-    pub fn convert_to_instruction(&self, to_type: &Self) -> Vec<WatInstruction> {
+    pub fn convert_to_instruction(&self, to_type: &Self) -> InstructionsList {
         use WasmType::*;
         match (self, to_type) {
             (I32, I32) => vec![],
@@ -411,23 +413,23 @@ pub enum WatInstruction {
     ArrayGetU(String),
     ArraySet(String),
     RefNull(WasmType),
+    RefCast(WasmType),
     Ref(String),
     RefFunc(String),
-    RefCast(WasmType),
     Type(String),
     Return,
     ReturnCall(String),
     Block {
         label: String,
-        instructions: Vec<WatInstruction>,
+        instructions: InstructionsList,
     },
     Loop {
         label: String,
-        instructions: Vec<WatInstruction>,
+        instructions: InstructionsList,
     },
     If {
-        then: Vec<WatInstruction>,
-        r#else: Option<Vec<WatInstruction>>,
+        then: InstructionsList,
+        r#else: Option<InstructionsList>,
     },
     BrIf(String),
     Br(String),
@@ -439,20 +441,20 @@ pub enum WatInstruction {
     RefI31,
     Throw(String),
     Try {
-        try_block: Box<WatInstruction>,
-        catches: Vec<Box<WatInstruction>>,
-        catch_all: Option<Box<WatInstruction>>,
+        try_block: InstructionsList,
+        catches: Vec<InstructionsList>,
+        catch_all: Option<InstructionsList>,
     },
-    Catch(String, Box<WatInstruction>),
-    CatchAll(Box<WatInstruction>),
+    Catch(String, InstructionsList),
+    CatchAll(InstructionsList),
 }
 
 impl WatInstruction {
-    pub fn local(name: impl Into<String>, r#type: WasmType) -> Box<Self> {
-        Box::new(Self::Local {
+    pub fn local(name: impl Into<String>, r#type: WasmType) -> Self {
+        Self::Local {
             name: name.into(),
             r#type,
-        })
+        }
     }
 
     pub fn global_get(name: impl Into<String>) -> Self {
@@ -479,8 +481,8 @@ impl WatInstruction {
         Self::I32Const(value)
     }
 
-    pub fn f64_const(value: f64) -> Box<Self> {
-        Box::new(Self::F64Const(value))
+    pub fn f64_const(value: f64) -> Self {
+        Self::F64Const(value)
     }
 
     pub fn struct_new(name: impl Into<String>) -> Self {
@@ -511,41 +513,49 @@ impl WatInstruction {
         Self::ArraySet(name.into())
     }
 
-    pub fn ref_null(r#type: WasmType) -> Box<Self> {
-        Box::new(Self::RefNull(r#type))
+    pub fn ref_null(r#type: WasmType) -> Self {
+        Self::RefNull(r#type)
     }
 
-    pub fn ref_func(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::RefFunc(name.into()))
+    pub fn ref_null_any() -> Self {
+        Self::RefNull(WasmType::Anyref)
     }
 
-    pub fn type_(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Type(name.into()))
+    pub fn ref_func(name: impl Into<String>) -> Self {
+        Self::RefFunc(name.into())
     }
 
-    pub fn r#return() -> Box<Self> {
-        Box::new(Self::Return)
+    pub fn ref_cast(t: WasmType) -> Self {
+        Self::RefCast(t)
     }
 
-    pub fn return_call(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::ReturnCall(name.into()))
+    pub fn type_(name: impl Into<String>) -> Self {
+        Self::Type(name.into())
     }
 
-    pub fn block(label: impl Into<String>, instructions: Vec<WatInstruction>) -> Self {
+    pub fn r#return() -> Self {
+        Self::Return
+    }
+
+    pub fn return_call(name: impl Into<String>) -> Self {
+        Self::ReturnCall(name.into())
+    }
+
+    pub fn block(label: impl Into<String>, instructions: InstructionsList) -> Self {
         Self::Block {
             label: label.into(),
             instructions,
         }
     }
 
-    pub fn r#loop(label: impl Into<String>, instructions: Vec<WatInstruction>) -> Self {
+    pub fn r#loop(label: impl Into<String>, instructions: InstructionsList) -> Self {
         Self::Loop {
             label: label.into(),
             instructions,
         }
     }
 
-    pub fn r#if(then: Vec<WatInstruction>, r#else: Option<Vec<WatInstruction>>) -> Self {
+    pub fn r#if(then: InstructionsList, r#else: Option<InstructionsList>) -> Self {
         Self::If { then, r#else }
     }
 
@@ -557,16 +567,16 @@ impl WatInstruction {
         Self::Br(label.into())
     }
 
-    pub fn empty() -> Box<Self> {
-        Box::new(Self::Empty)
+    pub fn empty() -> Self {
+        Self::Empty
     }
 
-    pub fn drop() -> Box<Self> {
-        Box::new(Self::Drop)
+    pub fn drop() -> Self {
+        Self::Drop
     }
 
-    pub fn i32_eqz() -> Box<Self> {
-        Box::new(Self::I32Eqz)
+    pub fn i32_eqz() -> Self {
+        Self::I32Eqz
     }
 
     pub fn ref_i31() -> Self {
@@ -577,24 +587,24 @@ impl WatInstruction {
         Self::Throw(label.into())
     }
 
-    pub fn r#type(name: impl Into<String>) -> Box<Self> {
-        Box::new(Self::Type(name.into()))
+    pub fn r#type(name: impl Into<String>) -> Self {
+        Self::Type(name.into())
     }
 
     pub fn r#try(
-        try_block: Box<Self>,
-        catches: Vec<Box<Self>>,
-        catch_all: Option<Box<Self>>,
-    ) -> Box<Self> {
-        Box::new(Self::Try {
+        try_block: InstructionsList,
+        catches: Vec<InstructionsList>,
+        catch_all: Option<InstructionsList>,
+    ) -> Self {
+        Self::Try {
             try_block,
             catches,
             catch_all,
-        })
+        }
     }
 
-    pub fn catch(label: impl Into<String>, instr: Box<Self>) -> Box<Self> {
-        Box::new(Self::Catch(label.into(), instr))
+    pub fn catch(label: impl Into<String>, instr: InstructionsList) -> Self {
+        Self::Catch(label.into(), instr)
     }
 
     pub fn is_return(&self) -> bool {
@@ -736,7 +746,15 @@ impl fmt::Display for WatInstruction {
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 write!(f, "(array.new_fixed {typeidx} {n})")
             }
-            WatInstruction::RefNull(r#type) => write!(f, "(ref.null {})", r#type),
+            WatInstruction::RefNull(ty) => {
+                let ty_str = if let WasmType::Anyref = ty {
+                    "any".to_string()
+                } else {
+                    ty.to_string()
+                };
+
+                write!(f, "(ref.null {ty_str})")
+            }
             WatInstruction::RefFunc(name) => write!(f, "(ref.func ${})", name),
             WatInstruction::Return => write!(f, "return"),
             WatInstruction::ReturnCall(name) => write!(f, "(return_call {name})"),
@@ -799,22 +817,50 @@ impl fmt::Display for WatInstruction {
                 catches,
                 catch_all,
             } => {
+                let try_block_str = try_block
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<String>>()
+                    .join("");
                 writeln!(
                     f,
-                    "\ntry\n{try_block}{}{}\nend",
+                    "\ntry\n{try_block_str}{}{}\nend",
                     catches
                         .iter()
-                        .map(|c| c.to_string())
+                        .map(|c| c
+                            .iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<String>>()
+                            .join(""))
                         .collect::<Vec<String>>()
                         .join(""),
                     catch_all
                         .clone()
-                        .map(|c| c.to_string())
+                        .map(|c| c
+                            .iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<String>>()
+                            .join(""))
                         .unwrap_or("".to_string())
                 )
             }
-            WatInstruction::Catch(label, instr) => writeln!(f, "\ncatch {label}\n{instr}"),
-            WatInstruction::CatchAll(instr) => writeln!(f, "\ncatch_all\n{instr}"),
+            WatInstruction::Catch(label, instr) => {
+                let instr_str = instr
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<String>>()
+                    .join("");
+                writeln!(f, "\ncatch {label}\n{instr_str}")
+            }
+
+            WatInstruction::CatchAll(instr) => {
+                let instr_str = instr
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<String>>()
+                    .join("");
+                writeln!(f, "\ncatch_all\n{instr_str}")
+            }
             WatInstruction::I64ExtendI32S => writeln!(f, "(i64.extend_32_s)"),
             WatInstruction::I32WrapI64 => writeln!(f, "(i32.wrap_i64)"),
             WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
@@ -862,10 +908,10 @@ impl fmt::Display for WatInstruction {
 pub struct WatFunction {
     pub name: String,
     pub params: Vec<(String, WasmType)>,
-    pub return_type: Option<WasmType>,
+    pub results: Vec<WasmType>,
     pub locals: HashMap<String, WasmType>,
     pub locals_counters: HashMap<String, u32>,
-    pub body: Vec<Box<WatInstruction>>,
+    pub body: VecDeque<WatInstruction>,
 }
 
 impl WatFunction {
@@ -873,10 +919,10 @@ impl WatFunction {
         WatFunction {
             name: name.into(),
             params: Vec::new(),
-            return_type: None,
+            results: vec![],
             locals: HashMap::new(),
             locals_counters: HashMap::new(),
-            body: Vec::new(),
+            body: VecDeque::new(),
         }
     }
 
@@ -884,8 +930,8 @@ impl WatFunction {
         self.params.push((name.into(), type_.clone()));
     }
 
-    pub fn set_return_type(&mut self, type_: WasmType) {
-        self.return_type = Some(type_);
+    pub fn set_results(&mut self, results: Vec<WasmType>) {
+        self.results = results;
     }
 
     pub fn add_local_exact(&mut self, name: impl Into<String>, r#type: WasmType) {
@@ -904,7 +950,15 @@ impl WatFunction {
     }
 
     pub fn add_instruction(&mut self, instruction: WatInstruction) {
-        self.body.push(Box::new(instruction));
+        self.body.push_back(instruction);
+    }
+
+    pub fn add_instructions(&mut self, instructions: InstructionsList) {
+        self.body.append(&mut instructions.into());
+    }
+
+    pub fn has_results(&self) -> bool {
+        !self.results.is_empty()
     }
 }
 
@@ -914,8 +968,12 @@ impl fmt::Display for WatFunction {
         for (name, type_) in &self.params {
             write!(f, " (param {} {})", name, type_)?;
         }
-        if let Some(return_type) = &self.return_type {
-            write!(f, " (result {})", return_type)?;
+        if self.has_results() {
+            write!(f, " (result ")?;
+            for result in &self.results {
+                write!(f, "{} ", result)?;
+            }
+            write!(f, ")")?;
         }
         writeln!(f)?;
         for (name, type_) in &self.locals {
