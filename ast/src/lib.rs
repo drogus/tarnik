@@ -624,82 +624,82 @@ impl WatInstruction {
 impl fmt::Display for WatInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WatInstruction::F32Neg => write!(f, "(f32.neg)"),
-            WatInstruction::F64Neg => write!(f, "(f64.neg)"),
+            WatInstruction::F32Neg => writeln!(f, "(f32.neg)"),
+            WatInstruction::F64Neg => writeln!(f, "(f64.neg)"),
 
-            WatInstruction::I32Add => write!(f, "(i32.add)"),
-            WatInstruction::I64Add => write!(f, "(i64.add)"),
-            WatInstruction::F32Add => write!(f, "(f32.add)"),
-            WatInstruction::F64Add => write!(f, "(f64.add)"),
+            WatInstruction::I32Add => writeln!(f, "(i32.add)"),
+            WatInstruction::I64Add => writeln!(f, "(i64.add)"),
+            WatInstruction::F32Add => writeln!(f, "(f32.add)"),
+            WatInstruction::F64Add => writeln!(f, "(f64.add)"),
 
-            WatInstruction::I32Sub => write!(f, "(i32.sub)"),
-            WatInstruction::I64Sub => write!(f, "(i64.sub)"),
-            WatInstruction::F32Sub => write!(f, "(f32.sub)"),
-            WatInstruction::F64Sub => write!(f, "(f64.sub)"),
+            WatInstruction::I32Sub => writeln!(f, "(i32.sub)"),
+            WatInstruction::I64Sub => writeln!(f, "(i64.sub)"),
+            WatInstruction::F32Sub => writeln!(f, "(f32.sub)"),
+            WatInstruction::F64Sub => writeln!(f, "(f64.sub)"),
 
-            WatInstruction::I32Mul => write!(f, "(i32.mul)"),
-            WatInstruction::I64Mul => write!(f, "(i64.mul)"),
-            WatInstruction::F32Mul => write!(f, "(f32.mul)"),
-            WatInstruction::F64Mul => write!(f, "(f64.mul)"),
+            WatInstruction::I32Mul => writeln!(f, "(i32.mul)"),
+            WatInstruction::I64Mul => writeln!(f, "(i64.mul)"),
+            WatInstruction::F32Mul => writeln!(f, "(f32.mul)"),
+            WatInstruction::F64Mul => writeln!(f, "(f64.mul)"),
 
-            WatInstruction::I32DivS => write!(f, "(i32.div_s)"),
-            WatInstruction::I64DivS => write!(f, "(i64.div_s)"),
-            WatInstruction::I32DivU => write!(f, "(i32.div_u)"),
-            WatInstruction::I64DivU => write!(f, "(i64.div_u)"),
-            WatInstruction::F32Div => write!(f, "(f32.div)"),
-            WatInstruction::F64Div => write!(f, "(f64.div)"),
+            WatInstruction::I32DivS => writeln!(f, "(i32.div_s)"),
+            WatInstruction::I64DivS => writeln!(f, "(i64.div_s)"),
+            WatInstruction::I32DivU => writeln!(f, "(i32.div_u)"),
+            WatInstruction::I64DivU => writeln!(f, "(i64.div_u)"),
+            WatInstruction::F32Div => writeln!(f, "(f32.div)"),
+            WatInstruction::F64Div => writeln!(f, "(f64.div)"),
 
-            WatInstruction::I32LeS => write!(f, "(i32.le_s)"),
-            WatInstruction::I64LeS => write!(f, "(i64.le_s)"),
-            WatInstruction::I32LeU => write!(f, "(i32.le_u)"),
-            WatInstruction::I64LeU => write!(f, "(i64.le_u)"),
-            WatInstruction::F32Le => write!(f, "(f32.le)"),
-            WatInstruction::F64Le => write!(f, "(f64.le)"),
+            WatInstruction::I32LeS => writeln!(f, "(i32.le_s)"),
+            WatInstruction::I64LeS => writeln!(f, "(i64.le_s)"),
+            WatInstruction::I32LeU => writeln!(f, "(i32.le_u)"),
+            WatInstruction::I64LeU => writeln!(f, "(i64.le_u)"),
+            WatInstruction::F32Le => writeln!(f, "(f32.le)"),
+            WatInstruction::F64Le => writeln!(f, "(f64.le)"),
 
-            WatInstruction::I32LtS => write!(f, "(i32.lt_s)"),
-            WatInstruction::I64LtS => write!(f, "(i64.lt_s)"),
-            WatInstruction::I32LtU => write!(f, "(i32.lt_u)"),
-            WatInstruction::I64LtU => write!(f, "(i64.lt_u)"),
-            WatInstruction::F32Lt => write!(f, "(f32.lt)"),
-            WatInstruction::F64Lt => write!(f, "(f64.lt)"),
+            WatInstruction::I32LtS => writeln!(f, "(i32.lt_s)"),
+            WatInstruction::I64LtS => writeln!(f, "(i64.lt_s)"),
+            WatInstruction::I32LtU => writeln!(f, "(i32.lt_u)"),
+            WatInstruction::I64LtU => writeln!(f, "(i64.lt_u)"),
+            WatInstruction::F32Lt => writeln!(f, "(f32.lt)"),
+            WatInstruction::F64Lt => writeln!(f, "(f64.lt)"),
 
-            WatInstruction::I32GeS => write!(f, "(i32.ge_s)"),
-            WatInstruction::I64GeS => write!(f, "(i64.ge_s)"),
-            WatInstruction::I32GeU => write!(f, "(i32.ge_u)"),
-            WatInstruction::I64GeU => write!(f, "(i64.ge_u)"),
-            WatInstruction::F32Ge => write!(f, "(f32.ge)"),
-            WatInstruction::F64Ge => write!(f, "(f64.ge)"),
+            WatInstruction::I32GeS => writeln!(f, "(i32.ge_s)"),
+            WatInstruction::I64GeS => writeln!(f, "(i64.ge_s)"),
+            WatInstruction::I32GeU => writeln!(f, "(i32.ge_u)"),
+            WatInstruction::I64GeU => writeln!(f, "(i64.ge_u)"),
+            WatInstruction::F32Ge => writeln!(f, "(f32.ge)"),
+            WatInstruction::F64Ge => writeln!(f, "(f64.ge)"),
 
-            WatInstruction::I32GtS => write!(f, "(i32.gt_s)"),
-            WatInstruction::I64GtS => write!(f, "(i64.gt_s)"),
-            WatInstruction::I32GtU => write!(f, "(i32.gt_u)"),
-            WatInstruction::I64GtU => write!(f, "(i64.gt_u)"),
-            WatInstruction::F32Gt => write!(f, "(f32.gt)"),
-            WatInstruction::F64Gt => write!(f, "(f64.gt)"),
+            WatInstruction::I32GtS => writeln!(f, "(i32.gt_s)"),
+            WatInstruction::I64GtS => writeln!(f, "(i64.gt_s)"),
+            WatInstruction::I32GtU => writeln!(f, "(i32.gt_u)"),
+            WatInstruction::I64GtU => writeln!(f, "(i64.gt_u)"),
+            WatInstruction::F32Gt => writeln!(f, "(f32.gt)"),
+            WatInstruction::F64Gt => writeln!(f, "(f64.gt)"),
 
-            WatInstruction::I32RemS => write!(f, "(i32.rem_s)"),
-            WatInstruction::I64RemS => write!(f, "(i64.rem_s)"),
-            WatInstruction::I32RemU => write!(f, "(i32.rem_u)"),
-            WatInstruction::I64RemU => write!(f, "(i64.rem_u)"),
+            WatInstruction::I32RemS => writeln!(f, "(i32.rem_s)"),
+            WatInstruction::I64RemS => writeln!(f, "(i64.rem_s)"),
+            WatInstruction::I32RemU => writeln!(f, "(i32.rem_u)"),
+            WatInstruction::I64RemU => writeln!(f, "(i64.rem_u)"),
 
-            WatInstruction::I32ShlS => write!(f, "(i32.shl_s)"),
-            WatInstruction::I64ShlS => write!(f, "(i64.shl_s)"),
-            WatInstruction::I32ShlU => write!(f, "(i32.shl_u)"),
-            WatInstruction::I64ShlU => write!(f, "(i64.shl_u)"),
+            WatInstruction::I32ShlS => writeln!(f, "(i32.shl_s)"),
+            WatInstruction::I64ShlS => writeln!(f, "(i64.shl_s)"),
+            WatInstruction::I32ShlU => writeln!(f, "(i32.shl_u)"),
+            WatInstruction::I64ShlU => writeln!(f, "(i64.shl_u)"),
 
-            WatInstruction::I32ShrS => write!(f, "(i32.shr_s)"),
-            WatInstruction::I64ShrS => write!(f, "(i64.shr_s)"),
-            WatInstruction::I32ShrU => write!(f, "(i32.shr_u)"),
-            WatInstruction::I64ShrU => write!(f, "(i64.shr_u)"),
+            WatInstruction::I32ShrS => writeln!(f, "(i32.shr_s)"),
+            WatInstruction::I64ShrS => writeln!(f, "(i64.shr_s)"),
+            WatInstruction::I32ShrU => writeln!(f, "(i32.shr_u)"),
+            WatInstruction::I64ShrU => writeln!(f, "(i64.shr_u)"),
 
-            WatInstruction::I32And => write!(f, "(i32.and)"),
-            WatInstruction::I64And => write!(f, "(i64.and)"),
+            WatInstruction::I32And => writeln!(f, "(i32.and)"),
+            WatInstruction::I64And => writeln!(f, "(i64.and)"),
 
-            WatInstruction::I32Or => write!(f, "(i32.or)"),
-            WatInstruction::I64Or => write!(f, "(i64.or)"),
+            WatInstruction::I32Or => writeln!(f, "(i32.or)"),
+            WatInstruction::I64Or => writeln!(f, "(i64.or)"),
 
-            WatInstruction::I32Xor => write!(f, "(i32.xor)"),
-            WatInstruction::I64Xor => write!(f, "(i64.xor)"),
+            WatInstruction::I32Xor => writeln!(f, "(i32.xor)"),
+            WatInstruction::I64Xor => writeln!(f, "(i64.xor)"),
 
             WatInstruction::I32Store(label) => memory_op(f, "i32.store", label),
             WatInstruction::I64Store(label) => memory_op(f, "i64.store", label),
@@ -727,27 +727,25 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64Load32U(label) => memory_op(f, "i64.load32_u", label),
 
             WatInstruction::Nop => Ok(()),
-            WatInstruction::Local { name, r#type } => write!(f, "(local {} {})", name, r#type),
-            WatInstruction::GlobalGet(name) => write!(f, "(global.get {})", name),
-            WatInstruction::LocalGet(name) => write!(f, "(local.get {})", name),
-            WatInstruction::LocalSet(name) => write!(f, "(local.set {})", name),
+            WatInstruction::Local { name, r#type } => writeln!(f, "(local {} {})", name, r#type),
+            WatInstruction::GlobalGet(name) => writeln!(f, "(global.get {})", name),
+            WatInstruction::LocalGet(name) => writeln!(f, "(local.get {})", name),
+            WatInstruction::LocalSet(name) => writeln!(f, "(local.set {})", name),
             WatInstruction::Call(name) => writeln!(f, "(call {})", name),
 
-            WatInstruction::I32Const(value) => write!(f, "(i32.const {})", value),
-            WatInstruction::I64Const(value) => write!(f, "(i64.const {})", value),
-            WatInstruction::F32Const(value) => write!(f, "(f32.const {})", value),
-            WatInstruction::F64Const(value) => write!(f, "(f64.const {})", value),
+            WatInstruction::I32Const(value) => writeln!(f, "(i32.const {})", value),
+            WatInstruction::I64Const(value) => writeln!(f, "(i64.const {})", value),
+            WatInstruction::F32Const(value) => writeln!(f, "(f32.const {})", value),
+            WatInstruction::F64Const(value) => writeln!(f, "(f64.const {})", value),
 
             WatInstruction::StructNew(name) => write!(f, "(struct.new {})", name),
-            WatInstruction::StructGet(name, field) => write!(f, "(struct.get {name} {field})"),
-            WatInstruction::StructSet(name, field) => write!(f, "(struct.set {name} {field})"),
-            WatInstruction::ArrayNew(name) => {
-                write!(f, "(array.new {name})")
-            }
-            WatInstruction::ArrayLen => write!(f, "(array.len)"),
-            WatInstruction::ArrayGet(ty) => write!(f, "(array.get {ty})"),
-            WatInstruction::ArrayGetU(ty) => write!(f, "(array.get_u {ty})"),
-            WatInstruction::ArraySet(ty) => write!(f, "(array.set {ty})"),
+            WatInstruction::StructGet(name, field) => writeln!(f, "(struct.get {name} {field})"),
+            WatInstruction::StructSet(name, field) => writeln!(f, "(struct.set {name} {field})"),
+            WatInstruction::ArrayNew(name) => writeln!(f, "(array.new {name})"),
+            WatInstruction::ArrayLen => writeln!(f, "(array.len)"),
+            WatInstruction::ArrayGet(ty) => writeln!(f, "(array.get {ty})"),
+            WatInstruction::ArrayGetU(ty) => writeln!(f, "(array.get_u {ty})"),
+            WatInstruction::ArraySet(ty) => writeln!(f, "(array.set {ty})"),
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 write!(f, "(array.new_fixed {typeidx} {n})")
             }
@@ -760,9 +758,9 @@ impl fmt::Display for WatInstruction {
 
                 write!(f, "(ref.null {ty_str})")
             }
-            WatInstruction::RefFunc(name) => write!(f, "(ref.func ${})", name),
-            WatInstruction::Return => write!(f, "return"),
-            WatInstruction::ReturnCall(name) => write!(f, "(return_call {name})"),
+            WatInstruction::RefFunc(name) => writeln!(f, "(ref.func ${})", name),
+            WatInstruction::Return => writeln!(f, "return"),
+            WatInstruction::ReturnCall(name) => writeln!(f, "(return_call {name})"),
             WatInstruction::Block {
                 label,
                 instructions,
@@ -798,8 +796,8 @@ impl fmt::Display for WatInstruction {
                 }
                 write!(f, ")")
             }
-            WatInstruction::BrIf(label) => write!(f, "(br_if {})", label),
-            WatInstruction::Br(label) => write!(f, "(br {})", label),
+            WatInstruction::BrIf(label) => writeln!(f, "(br_if {})", label),
+            WatInstruction::Br(label) => writeln!(f, "(br {})", label),
             WatInstruction::Type(name) => write!(f, "{}", name),
             WatInstruction::Empty => Ok(()),
             WatInstruction::Log => {
@@ -810,13 +808,13 @@ impl fmt::Display for WatInstruction {
             WatInstruction::Drop => writeln!(f, "(drop)"),
             WatInstruction::LocalTee(name) => write!(f, "(local.tee {})", name),
 
-            WatInstruction::I32Eqz => write!(f, "(i32.eqz)"),
-            WatInstruction::I64Eqz => write!(f, "(i64.eqz)"),
-            WatInstruction::F32Eqz => write!(f, "(f32.eqz)"),
-            WatInstruction::F64Eqz => write!(f, "(f64.eqz)"),
+            WatInstruction::I32Eqz => writeln!(f, "(i32.eqz)"),
+            WatInstruction::I64Eqz => writeln!(f, "(i64.eqz)"),
+            WatInstruction::F32Eqz => writeln!(f, "(f32.eqz)"),
+            WatInstruction::F64Eqz => writeln!(f, "(f64.eqz)"),
 
-            WatInstruction::RefI31 => write!(f, "(ref.i31)"),
-            WatInstruction::Throw(label) => write!(f, "(throw {label})"),
+            WatInstruction::RefI31 => writeln!(f, "(ref.i31)"),
+            WatInstruction::Throw(label) => writeln!(f, "(throw {label})"),
             WatInstruction::Try {
                 try_block,
                 catches,
@@ -1154,6 +1152,6 @@ fn memory_op(f: &mut Formatter<'_>, instr: &str, _label: &Option<String>) -> fmt
     // if let Some(label) = label {
     //     write!(f, "({instr} (memory {label})")
     // } else {
-    write!(f, "({instr})")
+    writeln!(f, "({instr})")
     // }
 }
