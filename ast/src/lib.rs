@@ -447,7 +447,7 @@ pub enum WatInstruction {
     Throw(String),
     Try {
         try_block: InstructionsList,
-        catches: Vec<InstructionsList>,
+        catches: Vec<(String, InstructionsList)>,
         catch_all: Option<InstructionsList>,
     },
     Catch(String, InstructionsList),
@@ -602,7 +602,7 @@ impl WatInstruction {
 
     pub fn r#try(
         try_block: InstructionsList,
-        catches: Vec<InstructionsList>,
+        catches: Vec<(String, InstructionsList)>,
         catch_all: Option<InstructionsList>,
     ) -> Self {
         Self::Try {
@@ -772,9 +772,9 @@ impl fmt::Display for WatInstruction {
             } => {
                 writeln!(f, "(block {label}")?;
                 for instruction in instructions {
-                    writeln!(f, "  {}", instruction)?;
+                    write!(f, "  {}", instruction)?;
                 }
-                write!(f, ")")
+                writeln!(f, "  )")
             }
             WatInstruction::Loop {
                 label,
@@ -782,16 +782,16 @@ impl fmt::Display for WatInstruction {
             } => {
                 writeln!(f, "(loop {label}")?;
                 for instruction in instructions {
-                    writeln!(f, "  {}", instruction)?;
+                    write!(f, "  {}", instruction)?;
                 }
-                write!(f, ")")
+                writeln!(f, "  )")
             }
             WatInstruction::If { then, r#else } => {
                 write!(f, "(if (then")?;
                 for instruction in then {
                     write!(f, " {}", instruction)?;
                 }
-                write!(f, ")")?;
+                write!(f, "  )")?;
                 if let Some(else_block) = r#else {
                     write!(f, " (else")?;
                     for instruction in else_block {
@@ -799,7 +799,7 @@ impl fmt::Display for WatInstruction {
                     }
                     write!(f, ")")?;
                 }
-                write!(f, ")")
+                writeln!(f, ")")
             }
             WatInstruction::BrIf(label) => writeln!(f, "(br_if {})", label),
             WatInstruction::Br(label) => writeln!(f, "(br {})", label),
@@ -832,23 +832,27 @@ impl fmt::Display for WatInstruction {
                     .join("");
                 writeln!(
                     f,
-                    "\ntry\n{try_block_str}{}{}\nend",
+                    "\ntry\n{try_block_str}\n{}{}end",
                     catches
                         .iter()
-                        .map(|c| c
-                            .iter()
-                            .map(|i| i.to_string())
-                            .collect::<Vec<String>>()
-                            .join(""))
+                        .map(|(name, c)| format!(
+                            "catch {name}\n{}",
+                            c.iter()
+                                .map(|i| i.to_string())
+                                .collect::<Vec<String>>()
+                                .join("")
+                        ))
                         .collect::<Vec<String>>()
                         .join(""),
                     catch_all
                         .clone()
-                        .map(|c| c
-                            .iter()
-                            .map(|i| i.to_string())
-                            .collect::<Vec<String>>()
-                            .join(""))
+                        .map(|c| format!(
+                            "catch_all\n{}",
+                            c.iter()
+                                .map(|i| i.to_string())
+                                .collect::<Vec<String>>()
+                                .join("")
+                        ))
                         .unwrap_or("".to_string())
                 )
             }
@@ -997,9 +1001,9 @@ impl fmt::Display for WatFunction {
             writeln!(f, "  (local {} {})", name, type_)?;
         }
         for instruction in &self.body {
-            writeln!(f, "  {}", instruction)?;
+            write!(f, "  {}", instruction)?;
         }
-        writeln!(f, ")")
+        writeln!(f, "  )")
     }
 }
 
@@ -1092,11 +1096,6 @@ impl WatModule {
 impl fmt::Display for WatModule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "(module")?;
-        // Tags
-        for (label, typeidx) in &self.tags {
-            writeln!(f, "  (tag {label} (type {typeidx}))")?;
-        }
-
         // Imports
         for (module, name, type_) in &self.imports {
             writeln!(f, "  (import \"{}\" \"{}\" {})", module, name, type_)?;
@@ -1115,6 +1114,11 @@ impl fmt::Display for WatModule {
         // Types
         for (name, ty) in &self.types {
             writeln!(f, "  (type {name} {ty})")?;
+        }
+
+        // Tags
+        for (label, typeidx) in &self.tags {
+            writeln!(f, "  (tag {label} (type {typeidx}))")?;
         }
 
         // Data
@@ -1142,7 +1146,7 @@ impl fmt::Display for WatModule {
 
         // Function declarations
         for function in &self.functions {
-            writeln!(f, "(elem declare func ${})", function.name)?;
+            writeln!(f, "  (elem declare func ${})", function.name)?;
         }
 
         // Functions

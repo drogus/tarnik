@@ -8,6 +8,41 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_try_catch() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type ExceptionType = fn(i32, i64);
+            tag!(Exception, ExceptionType);
+
+            fn run() {
+                let a: i32 = 0;
+                let outer_x: i32;
+                let outer_y: i64;
+
+                try {
+                    a += 10;
+                    throw!(Exception, 1, 2 as i64);
+                }
+                catch(Exception, x: i32, y: i64) {
+                    a += 100;
+                    outer_x = x;
+                    outer_y = y;
+                }
+                catch_all {
+                    a += 1000;
+                }
+                assert(outer_x == 1, "first argument to the exception should be equal to 1");
+                assert(outer_y == 2, "second argument to the exception should be equal to 2");
+                assert(a == 1110, "a should equal to 1110");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_nullable() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type I64Array = [i64];

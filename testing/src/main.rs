@@ -1,5 +1,7 @@
+use tarnik_ast::{Signature, WasmType};
+
 fn main() {
-    let module: tarnik_ast::WatModule = tarnik::wasm! {
+    let mut module: tarnik_ast::WatModule = tarnik::wasm! {
         #[export("memory")]
         memory!("memory", 1);
 
@@ -10,6 +12,9 @@ fn main() {
         fn read(fd: i32, iov_start: i32, iov_len: i32, nread: i32) -> i32;
 
         type ImmutableString = [i8];
+
+        type ExceptionType = fn(i32, i64);
+        tag!(Exception, ExceptionType);
 
         #[export("_start")]
         fn run() {
@@ -44,6 +49,17 @@ fn main() {
             );
         }
     };
+    module.add_import(
+        "env",
+        "assert_exception_tag",
+        WasmType::Tag {
+            name: "$AssertException".to_string(),
+            signature: Box::new(Signature {
+                params: vec![WasmType::I32, WasmType::I32],
+                result: None,
+            }),
+        },
+    );
 
     println!("{module}");
 }

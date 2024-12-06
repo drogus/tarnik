@@ -8,7 +8,8 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     token::{self, Brace, Semi},
-    Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Local, Meta, Pat, PatType, Type,
+    Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop, ExprUnary, Lit, Local, Meta, Pat,
+    PatType, Type,
 };
 
 extern crate proc_macro;
@@ -20,7 +21,19 @@ use proc_macro2::{Literal, Punct, Spacing, Span, TokenStream as TokenStream2, To
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
-use tarnik_ast::{InstructionsList, StructField, WasmType, WatFunction, WatInstruction, WatModule};
+use tarnik_ast::{
+    InstructionsList, Signature, StructField, WasmType, WatFunction, WatInstruction, WatModule,
+};
+
+#[derive(Debug, Clone)]
+enum BodyElement {
+    Statement(Stmt),
+    TryCatch {
+        r#try: Vec<Stmt>,
+        catches: Vec<(Ident, Vec<Parameter>, Vec<Stmt>)>,
+        catch_all: Option<Vec<Stmt>>,
+    },
+}
 
 #[derive(Debug, Clone)]
 struct Parameter {
@@ -33,7 +46,7 @@ struct Function {
     name: String,
     parameters: Vec<Parameter>,
     return_type: Option<WasmType>,
-    body: Vec<Stmt>,
+    body: Vec<BodyElement>,
 }
 
 #[derive(Debug, Clone)]
@@ -142,59 +155,66 @@ impl Parse for GlobalScope {
             } else if input.peek(syn::Ident) && input.peek2(Token![!]) {
                 let mcro: syn::Macro = input.parse()?;
                 let macro_name = &mcro.path.segments[0].ident.to_string();
-                if macro_name == "memory" {
-                    let expressions = ::syn::parse::Parser::parse2(
-                        Punctuated::<Expr, Token![,]>::parse_terminated,
-                        mcro.tokens.clone(),
-                    )?;
+                match macro_name.as_str() {
+                    "memory" => {
+                        let expressions = ::syn::parse::Parser::parse2(
+                            Punctuated::<Expr, Token![,]>::parse_terminated,
+                            mcro.tokens.clone(),
+                        )?;
 
-                    if expressions.len() < 2 || expressions.len() > 3 {
-                        return Err(syn::Error::new_spanned(
+                        if expressions.len() < 2 || expressions.len() > 3 {
+                            return Err(syn::Error::new_spanned(
                             mcro,
                             "memory!() must have 2 or 3 arguments: name, size and optional max_size",
                         ));
-                    }
+                        }
 
-                    let name_expr = &expressions[0];
-                    let size_expr = &expressions[1];
-                    let max_size_expr = &expressions.get(2);
+                        let name_expr = &expressions[0];
+                        let size_expr = &expressions[1];
+                        let max_size_expr = &expressions.get(2);
 
-                    let name = if let Expr::Lit(expr_lit) = name_expr {
-                        if let Lit::Str(str) = &expr_lit.lit {
-                            str.value()
+                        let name = if let Expr::Lit(expr_lit) = name_expr {
+                            if let Lit::Str(str) = &expr_lit.lit {
+                                str.value()
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    mcro,
+                                    "first argument to memory!() has to be a string literal",
+                                ));
+                            }
                         } else {
                             return Err(syn::Error::new_spanned(
                                 mcro,
                                 "first argument to memory!() has to be a string literal",
                             ));
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            mcro,
-                            "first argument to memory!() has to be a string literal",
-                        ));
-                    };
+                        };
 
-                    let size: i32 = if let Expr::Lit(expr_lit) = size_expr {
-                        if let Lit::Int(int) = &expr_lit.lit {
-                            int.base10_parse()?
+                        let size: i32 = if let Expr::Lit(expr_lit) = size_expr {
+                            if let Lit::Int(int) = &expr_lit.lit {
+                                int.base10_parse()?
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    mcro,
+                                    "Second argument to memory!() has to be an integer",
+                                ));
+                            }
                         } else {
                             return Err(syn::Error::new_spanned(
                                 mcro,
                                 "Second argument to memory!() has to be an integer",
                             ));
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            mcro,
-                            "Second argument to memory!() has to be an integer",
-                        ));
-                    };
+                        };
 
-                    let max_size: Option<i32> = if let Some(max_size_expr) = max_size_expr {
-                        if let Expr::Lit(expr_lit) = name_expr {
-                            if let Lit::Int(int) = &expr_lit.lit {
-                                Some(int.base10_parse()?)
+                        let max_size: Option<i32> = if let Some(max_size_expr) = max_size_expr {
+                            if let Expr::Lit(expr_lit) = name_expr {
+                                if let Lit::Int(int) = &expr_lit.lit {
+                                    Some(int.base10_parse()?)
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        mcro,
+                                        "Third argument to memory!() has to be an integer",
+                                    ));
+                                }
                             } else {
                                 return Err(syn::Error::new_spanned(
                                     mcro,
@@ -202,26 +222,41 @@ impl Parse for GlobalScope {
                                 ));
                             }
                         } else {
+                            None
+                        };
+
+                        let label = format!("${name}");
+                        module.add_memory(&label, size, max_size);
+                        if let Some(export_name) = export_next {
+                            module.add_export(export_name, "memory", label);
+                            export_next = None;
+                        }
+                    }
+                    "tag" => {
+                        let idents = ::syn::parse::Parser::parse2(
+                            Punctuated::<Ident, Token![,]>::parse_terminated,
+                            mcro.tokens.clone(),
+                        )?;
+                        if idents.len() != 2 {
                             return Err(syn::Error::new_spanned(
-                                mcro,
-                                "Third argument to memory!() has to be an integer",
+                                mcro.tokens,
+                                "the tag! macro expects two identifiers: the name of the tag and the name of the type",
                             ));
                         }
-                    } else {
-                        None
-                    };
-
-                    let label = format!("${name}");
-                    module.add_memory(&label, size, max_size);
-                    if let Some(export_name) = export_next {
-                        module.add_export(export_name, "memory", label);
-                        export_next = None;
+                        let tag_name = format!("${}", idents[0]);
+                        let type_name = format!("${}", idents[1]);
+                        module.tags.insert(tag_name.clone(), type_name);
+                        if let Some(export_name) = export_next {
+                            module.add_export(export_name, "tag", tag_name);
+                            export_next = None;
+                        }
                     }
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        macro_name,
-                        "Only memory macro is supported at the top-level at the moment",
-                    ));
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            macro_name,
+                            format!("Top level macro {macro_name} not found"),
+                        ));
+                    }
                 }
 
                 if input.peek(token::Semi) {
@@ -248,7 +283,7 @@ impl Parse for GlobalScope {
 
             let mut instructions = Vec::new();
             for stmt in &f.body {
-                translate_statement(&mut module, &mut wat_function, &mut instructions, stmt)?;
+                translate_body_element(&mut module, &mut wat_function, &mut instructions, stmt)?;
             }
             wat_function.body = instructions.into();
             wat_function.results = if let Some(result) = f.return_type {
@@ -390,6 +425,16 @@ fn parse_type_def(input: &mut ParseStream) -> Result<(String, WasmType)> {
     Ok((format!("${ident}"), ty))
 }
 
+fn parse_param(mut input: ParseStream) -> Result<Parameter> {
+    let name: Ident = input.parse()?;
+    let _: Token![:] = input.parse()?;
+    let ty = parse_type(&mut input)?;
+    Ok(Parameter {
+        name: name.to_string(),
+        ty,
+    })
+}
+
 fn parse_function(input: &mut ParseStream) -> Result<Function> {
     let _: Token![fn] = input.parse()?;
     let name: Ident = input.parse()?;
@@ -419,12 +464,103 @@ fn parse_function(input: &mut ParseStream) -> Result<Function> {
     } else {
         None
     };
-    let mut body: Vec<Stmt> = Vec::new();
+    let mut body: Vec<BodyElement> = Vec::new();
 
     if input.peek(Brace) {
         let content;
         braced!(content in input);
-        body = content.call(syn::Block::parse_within)?;
+        while !content.is_empty() {
+            if content.peek(Token![try]) {
+                let try_token: Token![try] = content.parse()?;
+
+                let try_content;
+                braced!(try_content in content);
+                let mut try_statements = Vec::new();
+                while !try_content.is_empty() {
+                    let stmt: Stmt = try_content.parse()?;
+                    try_statements.push(stmt);
+                }
+
+                let mut catches = Vec::new();
+                let mut catch_all = None;
+
+                let mut go = true;
+                while go {
+                    let content_la = content.fork();
+                    if let Ok(potential_catch) = content_la.parse::<Ident>() {
+                        let pc_str = potential_catch.to_string();
+                        match pc_str.as_str() {
+                            "catch" => {
+                                let mut catch_statements = Vec::new();
+
+                                let _: Ident = content.parse()?;
+
+                                let catch_params;
+                                parenthesized!(catch_params in content);
+
+                                let error_type: Ident = catch_params.parse()?;
+
+                                let mut params: Vec<Parameter> = Vec::new();
+                                if catch_params.peek(Token![,]) {
+                                    let _: Token![,] = catch_params.parse()?;
+
+                                    let punctuated =
+                                        catch_params.parse_terminated(parse_param, Token![,])?;
+
+                                    for param in punctuated.into_iter() {
+                                        params.push(param);
+                                    }
+                                }
+
+                                let catch_content;
+                                braced!(catch_content in content);
+
+                                while !catch_content.is_empty() {
+                                    let stmt: Stmt = catch_content.parse()?;
+                                    catch_statements.push(stmt);
+                                }
+
+                                catches.push((error_type, params, catch_statements));
+                            }
+                            "catch_all" => {
+                                let _: Ident = content.parse()?;
+                                let mut catch_statements = Vec::new();
+                                let catch_content;
+                                braced!(catch_content in content);
+
+                                while !catch_content.is_empty() {
+                                    let stmt: Stmt = catch_content.parse()?;
+                                    catch_statements.push(stmt);
+                                }
+
+                                catch_all = Some(catch_statements);
+                            }
+                            _ => go = false,
+                        }
+                    } else {
+                        go = false;
+                    }
+                }
+
+                if !catches.is_empty() || catch_all.is_some() {
+                    let elem = BodyElement::TryCatch {
+                        r#try: try_statements,
+                        catches,
+                        catch_all,
+                    };
+                    body.push(elem);
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        try_token,
+                        "try requires catch or catch_all",
+                    ));
+                }
+            } else {
+                let stmt: Stmt = content.parse()?;
+                body.push(BodyElement::Statement(stmt));
+            }
+        }
+        // body = content.call(syn::Block::parse_within)?;
     } else {
         let _: Token![;] = input.parse()?;
     }
@@ -1958,7 +2094,7 @@ fn translate_expression(
                 current_block.push(get_var_instruction(module, function, &name).ok_or(
                     syn::Error::new_spanned(
                         path_expr,
-                        format!("Coudln't find {name} local or global"),
+                        format!("Couldn't find {name} local or global"),
                     ),
                 )?);
             }
@@ -2244,8 +2380,35 @@ impl ToTokens for OurWatInstruction {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
             }
             Throw(label) => quote! { #w::Throw(#label.to_string()) },
-            Try { .. } => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::Try ")
+            Try {
+                try_block,
+                catches,
+                catch_all,
+            } => {
+                let try_tokens = try_block
+                    .iter()
+                    .map(|instr| OurWatInstruction(instr.clone()));
+                let catches_tokens = catches.iter().map(|(name, instructions)| {
+                    let instructions = instructions
+                        .iter()
+                        .map(|instr| OurWatInstruction(instr.clone()));
+                    quote! { (#name.to_string(), vec![#(#instructions),*]) }
+                });
+                let catch_all_tokens = if let Some(catch_all) = catch_all {
+                    let catch_all_instructions =
+                        catch_all.iter().map(|i| OurWatInstruction(i.clone()));
+                    quote! { Some(vec![#(#catch_all_instructions),*]) }
+                } else {
+                    quote! { None }
+                };
+
+                quote! {
+                    #w::Try {
+                        try_block: vec![#(#try_tokens),*],
+                        catches: vec![#(#catches_tokens),*],
+                        catch_all: #catch_all_tokens,
+                    }
+                }
             }
             Catch(_, _) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Catch(_, ")
@@ -2428,8 +2591,22 @@ fn translate_type(ty: &Type) -> Option<WasmType> {
         syn::Type::Array(_) => {
             todo!("Stmt::Local(local): syn::Type::Array(_) ")
         }
-        syn::Type::BareFn(_) => {
-            todo!("Stmt::Local(local): syn::Type::BareFn(_) ")
+        syn::Type::BareFn(bare_fn) => {
+            dbg!(bare_fn);
+            Some(WasmType::Func {
+                name: None,
+                signature: Box::new(Signature {
+                    params: bare_fn
+                        .inputs
+                        .iter()
+                        .map(|i| translate_type(&i.ty).unwrap())
+                        .collect(),
+                    result: match &bare_fn.output {
+                        syn::ReturnType::Default => None,
+                        syn::ReturnType::Type(_, ty) => translate_type(ty.as_ref()),
+                    },
+                }),
+            })
         }
         syn::Type::Group(_) => {
             todo!("Stmt::Local(local): syn::Type::Group(_) ")
@@ -2544,6 +2721,35 @@ fn translate_macro(
 ) -> Result<()> {
     let name = ident.to_string();
     match name.as_ref() {
+        "throw" => {
+            ::syn::parse::Parser::parse2(
+                |input: ParseStream<'_>| {
+                    let error_type: Ident = input.parse()?;
+
+                    if input.peek(Token![,]) {
+                        let _: Token![,] = input.parse()?;
+
+                        let punctuated = input.parse_terminated(Expr::parse, Token![,])?;
+
+                        for param_expr in punctuated.into_iter() {
+                            translate_expression(
+                                module,
+                                function,
+                                instructions,
+                                &param_expr,
+                                None,
+                                None,
+                            )?;
+                        }
+                    }
+
+                    instructions.push(WatInstruction::throw(format!("${error_type}")));
+
+                    Ok(())
+                },
+                tokens.clone(),
+            )?;
+        }
         "len" => {
             let expr: Expr = ::syn::parse::Parser::parse2(Expr::parse, tokens)?;
             if let Expr::Path(expr_path) = expr {
@@ -2699,6 +2905,64 @@ fn translate_statement(
                 stmt_macro.span(),
             )?;
         }
+    }
+    Ok(())
+}
+
+fn translate_body_element(
+    module: &mut WatModule,
+    function: &mut WatFunction,
+    instructions: &mut InstructionsList,
+    elem: &BodyElement,
+) -> Result<()> {
+    match elem {
+        BodyElement::TryCatch {
+            r#try,
+            catches,
+            catch_all,
+        } => {
+            let mut try_instructions = Vec::new();
+            for stmt in r#try {
+                translate_statement(module, function, &mut try_instructions, stmt)?;
+            }
+
+            let mut wasm_catches = Vec::new();
+            for (ident, params, statements) in catches {
+                let mut catch_instructions = Vec::new();
+
+                // first we need to set params
+                for param in params.iter().rev() {
+                    let name = format!("${}", param.name);
+                    function.add_local_exact(name.clone(), param.ty.clone());
+
+                    catch_instructions.push(WatInstruction::local_set(name));
+                }
+
+                for stmt in statements {
+                    translate_statement(module, function, &mut catch_instructions, stmt)?;
+                }
+
+                wasm_catches.push((format!("${ident}"), catch_instructions));
+            }
+
+            let catch_all = if let Some(statements) = &catch_all {
+                let mut instructions = Vec::new();
+                for stmt in statements {
+                    translate_statement(module, function, &mut instructions, stmt)?;
+                }
+
+                Some(instructions)
+            } else {
+                None
+            };
+
+            instructions.push(WatInstruction::r#try(
+                try_instructions,
+                wasm_catches,
+                catch_all,
+            ));
+        }
+        BodyElement::Statement(stmt) => translate_statement(module, function, instructions, stmt)?,
     }
 
     Ok(())
