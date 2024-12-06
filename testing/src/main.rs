@@ -17,6 +17,7 @@ fn main() {
             let y: Nullable<ImmutableString>;
 
             ref_test!(x, ImmutableString);
+            len!(x);
             // we will read at most 100 chars into memory offset 20
             // memory[8] = 24;
             // memory[12] = 100;

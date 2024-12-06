@@ -2537,6 +2537,42 @@ fn translate_statement(
         Stmt::Macro(stmt_macro) => {
             let name = stmt_macro.mac.path.segments[0].ident.to_string();
             match name.as_ref() {
+                "len" => {
+                    let expr: Expr =
+                        ::syn::parse::Parser::parse2(Expr::parse, stmt_macro.mac.tokens.clone())?;
+                    if let Expr::Path(expr_path) = expr {
+                        let name = format!("${}", expr_path.path.segments[0].ident);
+                        let label_type = get_label_type(module, function, &name);
+                        match label_type {
+                            Some(label_type) => match label_type {
+                                LabelType::Global => {
+                                    instructions.push(WatInstruction::GlobalGet(name))
+                                }
+                                LabelType::Local => {
+                                    instructions.push(WatInstruction::LocalGet(name))
+                                }
+                                LabelType::Memory => {
+                                    return Err(syn::Error::new_spanned(
+                                        stmt_macro,
+                                        "Can't get a length of a memory",
+                                    ))
+                                }
+                            },
+                            None => {
+                                return Err(syn::Error::new_spanned(
+                                    stmt_macro,
+                                    "{name} variable not found",
+                                ))
+                            }
+                        }
+                        instructions.push(WatInstruction::ArrayLen);
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            stmt_macro,
+                            "The len!() macro expects an identifier, for example len!(x);",
+                        ));
+                    }
+                }
                 "ref_test" => {
                     // There will be some hackery here. I don't really want to write my own parser,
                     // so I'm treating the tokens in between parens as a `let foo: Type` statement.
