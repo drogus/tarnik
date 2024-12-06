@@ -414,6 +414,7 @@ pub enum WatInstruction {
     ArraySet(String),
     RefNull(WasmType),
     RefCast(WasmType),
+    RefTest(String, WasmType),
     Ref(String),
     RefFunc(String),
     Type(String),
@@ -527,6 +528,10 @@ impl WatInstruction {
 
     pub fn ref_cast(t: WasmType) -> Self {
         Self::RefCast(t)
+    }
+
+    pub fn ref_test(name: impl Into<String>, t: WasmType) -> Self {
+        Self::RefTest(name.into(), t)
     }
 
     pub fn type_(name: impl Into<String>) -> Self {
@@ -900,6 +905,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32GetS => writeln!(f, "(i32.get_s)"),
             WatInstruction::I32GetU => writeln!(f, "(i32.get_u)"),
             WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
+            WatInstruction::RefTest(name, ty) => writeln!(f, "(ref.test {name} {ty})"),
         }
     }
 }

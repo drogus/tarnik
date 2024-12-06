@@ -13,35 +13,39 @@ fn main() {
 
         #[export("_start")]
         fn run() {
+            let x: ImmutableString;
+            let y: Nullable<ImmutableString>;
+
+            ref_test!(x, ImmutableString);
             // we will read at most 100 chars into memory offset 20
-            memory[8] = 24;
-            memory[12] = 100;
-            let foo: i32 = read(0, 8, 1, 4);
-
-            let hello: ImmutableString = "Hello ";
-            let i: i32 = 1000;
-            for c in hello {
-                memory[i] = c;
-                i += 1;
-            }
-            // put exlamation mark at memory[500]
-            memory[500] = '!';
-
-            // store hello to iovectors
-            memory[0] = 1000;
-            memory[4] = i;
-            // memory[8] and memory[20] already have the read vector
-            // add vector for the exlamation mark
-            memory[16] = 500;
-            memory[20] = 1;
-
-            // `let: foo`` is small hack, if a function returns a value it needs to be somehow consumed
-            let foo: i32 = write(
-                1, // stdout
-                0, // io vectors start
-                3, // number of io vectors
-                50, // where to write the result
-            );
+            // memory[8] = 24;
+            // memory[12] = 100;
+            // let foo: i32 = read(0, 8, 1, 4);
+            //
+            // let hello: ImmutableString = "Hello ";
+            // let i: i32 = 1000;
+            // for c in hello {
+            //     memory[i] = c;
+            //     i += 1;
+            // }
+            // // put exlamation mark at memory[500]
+            // memory[500] = '!';
+            //
+            // // store hello to iovectors
+            // memory[0] = 1000;
+            // memory[4] = i;
+            // // memory[8] and memory[20] already have the read vector
+            // // add vector for the exlamation mark
+            // memory[16] = 500;
+            // memory[20] = 1;
+            //
+            // // `let: foo`` is small hack, if a function returns a value it needs to be somehow consumed
+            // let foo: i32 = write(
+            //     1, // stdout
+            //     0, // io vectors start
+            //     3, // number of io vectors
+            //     50, // where to write the result
+            // );
         }
     };
 

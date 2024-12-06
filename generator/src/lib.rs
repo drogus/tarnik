@@ -7,7 +7,7 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     token::{self, Brace, Semi},
-    Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Meta, Pat, PatType, Type,
+    Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Local, Meta, Pat, PatType, Type,
 };
 
 extern crate proc_macro;
@@ -15,7 +15,7 @@ extern crate proc_macro2;
 extern crate quote;
 extern crate syn;
 
-use proc_macro2::{Literal, Span, TokenStream as TokenStream2};
+use proc_macro2::{Literal, Punct, Spacing, Span, TokenStream as TokenStream2, TokenTree};
 use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
@@ -1053,6 +1053,7 @@ fn get_type(
             WatInstruction::I32GetS => Some(WasmType::I32),
             WatInstruction::I32GetU => Some(WasmType::I32),
             WatInstruction::RefCast(ty) => Some(ty.clone()),
+            WatInstruction::RefTest(_, _) => Some(WasmType::I32),
         })
         .flatten()
 }
@@ -2315,6 +2316,12 @@ impl ToTokens for OurWatInstruction {
                     #w::RefCast(#ty)
                 }
             }
+            RefTest(name, ty) => {
+                let ty = OurWasmType(ty.clone());
+                quote! {
+                    #w::RefTest(#name.to_string(), #ty)
+                }
+            }
         };
         tokens.extend(tokens_str);
     }
@@ -2527,7 +2534,57 @@ fn translate_statement(
         Stmt::Expr(expr, semi) => {
             translate_expression(module, function, instructions, expr, *semi, None)?;
         }
-        Stmt::Macro(_) => todo!("Stmt::Macro(_) "),
+        Stmt::Macro(stmt_macro) => {
+            let name = stmt_macro.mac.path.segments[0].ident.to_string();
+            match name.as_ref() {
+                "ref_test" => {
+                    // There will be some hackery here. I don't really want to write my own parser,
+                    // so I'm treating the tokens in between parens as a `let foo: Type` statement.
+                    // I still expect it as two arguments, so first I'll convert `foo, Type` into a
+                    // proper form
+                    let a_let =
+                        vec![TokenTree::Ident(Ident::new("let", Span::call_site()))].into_iter();
+                    let tokens = stmt_macro.mac.tokens.clone().into_iter().map(|t| {
+                        if t.to_string() == "," {
+                            TokenTree::Punct(Punct::new(':', Spacing::Alone))
+                        } else {
+                            t
+                        }
+                    });
+                    let semi = vec![TokenTree::Punct(Punct::new(';', Spacing::Alone))].into_iter();
+                    let tokens = TokenStream2::from_iter(a_let.chain(tokens).chain(semi));
+
+                    let stmt: Stmt = ::syn::parse::Parser::parse2(Stmt::parse, tokens)?;
+                    if let Stmt::Local(Local {
+                        pat: syn::Pat::Type(pat_type),
+                        ..
+                    }) = stmt
+                    {
+                        println!("pat_type: {pat_type:#?}");
+                        let (name, ty) = translate_pat_type(function, &pat_type);
+                        if let Some(ty) = ty {
+                            instructions.push(WatInstruction::ref_test(name, ty));
+                        } else {
+                            return Err(syn::Error::new_spanned(
+                                pat_type,
+                                "Type has to be given as the second argument for ref_test! macro",
+                            ));
+                        }
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            stmt_macro,
+                            "Invalid arguments for the ref_test! macro. The first argument has to be an identifier of a variable. The second argument must be a type"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        stmt_macro,
+                        format!("Undefined macro {name}"),
+                    ));
+                }
+            }
+        }
     }
 
     Ok(())
