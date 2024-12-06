@@ -8,6 +8,26 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_nullable() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type I64Array = [i64];
+            fn run() {
+                let x: Nullable<I64Array> = null;
+                // TODO: refactor when negate is implemented
+                if ref_test!(x, null) {
+                } else {
+                    assert(0, "Couldn't successfully test for null");
+                }
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_len() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type I64Array = [i64];

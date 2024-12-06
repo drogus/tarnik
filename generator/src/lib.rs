@@ -720,6 +720,7 @@ fn translate_binary(
                 WasmType::I8 => WatInstruction::I32Eq,
                 WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
                 WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
+                WasmType::NullRef => todo!("translate_binary: WasmType::NullRef "),
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
                 WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
@@ -772,6 +773,7 @@ fn translate_binary(
                 WasmType::I8 => WatInstruction::I32Ne,
                 WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
                 WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
+                WasmType::NullRef => todo!("translate_binary: WasmType::NullRef "),
                 WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
                 WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
                 WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
@@ -1347,7 +1349,13 @@ fn get_var_instruction(
     function: &WatFunction,
     label: &str,
 ) -> Option<WatInstruction> {
-    match get_label_type(module, function, label) {
+    let label = if !label.starts_with("$") {
+        format!("${label}")
+    } else {
+        label.into()
+    };
+
+    match get_label_type(module, function, &label) {
         Some(label_type) => match label_type {
             LabelType::Global => Some(WatInstruction::global_get(label)),
             LabelType::Local => Some(WatInstruction::local_get(label)),
@@ -1799,6 +1807,7 @@ fn translate_expression(
                     WasmType::Struct(_) => todo!("as struct"),
                     WasmType::Func { .. } => todo!("as func"),
                     WasmType::Tag { .. } => todo!("as tag"),
+                    WasmType::NullRef => todo!("as nullref"),
                 }
             } else {
                 return Err(syn::Error::new_spanned(
@@ -1939,7 +1948,20 @@ fn translate_expression(
         Expr::Paren(_) => todo!("translate_expression: Expr::Paren(_) "),
         Expr::Path(path_expr) => {
             let name = path_expr.path.segments[0].ident.to_string();
-            current_block.push(WatInstruction::LocalGet(format!("${name}")));
+            if name == "null" {
+                let ty = ty.ok_or(syn::Error::new_spanned(
+                    path_expr,
+                    "Couldn't get the type for null",
+                ))?;
+                current_block.push(WatInstruction::ref_null(ty.clone()));
+            } else {
+                current_block.push(get_var_instruction(module, function, &name).ok_or(
+                    syn::Error::new_spanned(
+                        path_expr,
+                        format!("Coudln't find {name} local or global"),
+                    ),
+                )?);
+            }
         }
         Expr::Range(_) => todo!("translate_expression: Expr::Range(_) "),
         Expr::RawAddr(_) => todo!("translate_expression: Expr::RawAddr(_) "),
@@ -2034,6 +2056,7 @@ impl ToTokens for OurWasmType {
             WasmType::I8 => quote! { tarnik_ast::WasmType::I8 },
             WasmType::I31Ref => quote! { tarnik_ast::WasmType::I31Ref },
             WasmType::Anyref => quote! { tarnik_ast::WasmType::Anyref },
+            WasmType::NullRef => quote! { tarnik_ast::WasmType::NullRef },
             WasmType::Ref(r, nullable) => {
                 let nullable = match nullable {
                     tarnik_ast::Nullable::True => quote! {tarnik_ast::Nullable::True},
@@ -2154,8 +2177,9 @@ impl ToTokens for OurWatInstruction {
                 quote! { #w::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
             ArrayNew(typeidx) => quote! { #w::ArrayNew(#typeidx.to_string()) },
-            RefNull(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefNull(_) ")
+            RefNull(ty) => {
+                let ty = OurWasmType(ty.clone());
+                quote! { #w::RefNull(#ty) }
             }
             Ref(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Ref(_) ")

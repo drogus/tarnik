@@ -55,6 +55,7 @@ pub enum WasmType {
     I8,
     I31Ref,
     Anyref,
+    NullRef,
     Ref(String, Nullable),
     Array {
         mutable: bool,
@@ -168,6 +169,7 @@ impl fmt::Display for WasmType {
             WasmType::F64 => write!(f, "f64"),
             WasmType::I8 => write!(f, "i8"),
             WasmType::Anyref => write!(f, "anyref"),
+            WasmType::NullRef => write!(f, "nullref"),
             WasmType::I31Ref => write!(f, "i31ref"),
             WasmType::Ref(name, nullable) => write!(f, "(ref {nullable} {name})"),
             WasmType::Array { mutable, ty } => {
@@ -224,6 +226,8 @@ impl FromStr for WasmType {
             "i8" => Self::I8,
             "i31ref" => Self::I31Ref,
             "anyref" => Self::Anyref,
+            "nullref" => Self::NullRef,
+            "null" => Self::NullRef,
             // this should not go here, as this crate is supposed to not
             // be tied to a certain implementation, but for now I'm leaving it here
             // TODO: fix this
@@ -750,10 +754,11 @@ impl fmt::Display for WatInstruction {
                 write!(f, "(array.new_fixed {typeidx} {n})")
             }
             WatInstruction::RefNull(ty) => {
-                let ty_str = if let WasmType::Anyref = ty {
-                    "any".to_string()
-                } else {
-                    ty.to_string()
+                let ty_str = match ty {
+                    WasmType::I31Ref => "i31",
+                    WasmType::Anyref => "any",
+                    WasmType::Ref(name, _) => name,
+                    t => panic!("Can't generate ref.null from {t:#?}"),
                 };
 
                 write!(f, "(ref.null {ty_str})")
@@ -903,7 +908,15 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32GetS => writeln!(f, "(i32.get_s)"),
             WatInstruction::I32GetU => writeln!(f, "(i32.get_u)"),
             WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
-            WatInstruction::RefTest(ty) => writeln!(f, "(ref.test {ty})"),
+            WatInstruction::RefTest(ty) => {
+                let ty_str = match ty {
+                    WasmType::I31Ref => "i31ref",
+                    WasmType::Anyref => "anyref",
+                    WasmType::NullRef => "nullref",
+                    t => &t.to_string(),
+                };
+                writeln!(f, "(ref.test {ty_str})")
+            }
         }
     }
 }
