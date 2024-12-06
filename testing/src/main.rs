@@ -9,44 +9,19 @@ fn main() {
         #[import("wasi_snapshot_preview1", "fd_read")]
         fn read(fd: i32, iov_start: i32, iov_len: i32, nread: i32) -> i32;
 
-        type ImmutableString = [i8];
-
-        #[export("_start")]
+        type I64Array = [i64];
         fn run() {
-            let x: ImmutableString;
-            let y: Nullable<ImmutableString>;
+            let x: I64Array = [44];
+            test_any(x);
+        }
 
-            ref_test!(x, ImmutableString);
-            len!(x);
-            // we will read at most 100 chars into memory offset 20
-            // memory[8] = 24;
-            // memory[12] = 100;
-            // let foo: i32 = read(0, 8, 1, 4);
-            //
-            // let hello: ImmutableString = "Hello ";
-            // let i: i32 = 1000;
-            // for c in hello {
-            //     memory[i] = c;
-            //     i += 1;
-            // }
-            // // put exlamation mark at memory[500]
-            // memory[500] = '!';
-            //
-            // // store hello to iovectors
-            // memory[0] = 1000;
-            // memory[4] = i;
-            // // memory[8] and memory[20] already have the read vector
-            // // add vector for the exlamation mark
-            // memory[16] = 500;
-            // memory[20] = 1;
-            //
-            // // `let: foo`` is small hack, if a function returns a value it needs to be somehow consumed
-            // let foo: i32 = write(
-            //     1, // stdout
-            //     0, // io vectors start
-            //     3, // number of io vectors
-            //     50, // where to write the result
-            // );
+        fn test_any(numbers: anyref) {
+            if ref_test!(numbers, I64Array) {
+                let numbers_i64: I64Array = numbers as I64Array;
+                assert(numbers_i64[0] == 44 as i64, "The first element of the numbers array should be 44");
+            } else {
+                assert(0, "$numbers should be an I64Array");
+            }
         }
     };
 

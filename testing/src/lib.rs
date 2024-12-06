@@ -8,6 +8,47 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_len() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type I64Array = [i64];
+            fn run() {
+                let x: I64Array = [44, 10, 11, 12];
+                assert(len!(x) == 4, "The $x array should have 4 elements");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
+    fn test_casting() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type I64Array = [i64];
+            fn run() {
+                let x: I64Array = [44];
+                test_any(x);
+            }
+
+            fn test_any(numbers: anyref) {
+                if ref_test!(numbers, I64Array) {
+                    let numbers_i64: I64Array = numbers as I64Array;
+                    assert(numbers_i64[0] == 44, "The first element of the numbers array should be 44");
+                } else {
+                    assert(0, "$numbers should be an I64Array");
+                }
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_arithmetic_operations() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             fn run() {

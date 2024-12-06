@@ -414,7 +414,7 @@ pub enum WatInstruction {
     ArraySet(String),
     RefNull(WasmType),
     RefCast(WasmType),
-    RefTest(String, WasmType),
+    RefTest(WasmType),
     Ref(String),
     RefFunc(String),
     Type(String),
@@ -530,8 +530,8 @@ impl WatInstruction {
         Self::RefCast(t)
     }
 
-    pub fn ref_test(name: impl Into<String>, t: WasmType) -> Self {
-        Self::RefTest(name.into(), t)
+    pub fn ref_test(t: WasmType) -> Self {
+        Self::RefTest(t)
     }
 
     pub fn type_(name: impl Into<String>) -> Self {
@@ -866,7 +866,7 @@ impl fmt::Display for WatInstruction {
                     .join("");
                 writeln!(f, "\ncatch_all\n{instr_str}")
             }
-            WatInstruction::I64ExtendI32S => writeln!(f, "(i64.extend_32_s)"),
+            WatInstruction::I64ExtendI32S => writeln!(f, "(i64.extend_i32_s)"),
             WatInstruction::I32WrapI64 => writeln!(f, "(i32.wrap_i64)"),
             WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
             WatInstruction::F64PromoteF32 => writeln!(f, "(f64.promote_f32)"),
@@ -905,7 +905,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32GetS => writeln!(f, "(i32.get_s)"),
             WatInstruction::I32GetU => writeln!(f, "(i32.get_u)"),
             WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
-            WatInstruction::RefTest(name, ty) => writeln!(f, "(ref.test {name} {ty})"),
+            WatInstruction::RefTest(ty) => writeln!(f, "(ref.test {ty})"),
         }
     }
 }

@@ -6,6 +6,7 @@ use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
+    spanned::Spanned,
     token::{self, Brace, Semi},
     Attribute, Expr, ExprBinary, ExprForLoop, ExprUnary, Lit, Local, Meta, Pat, PatType, Type,
 };
@@ -1053,7 +1054,7 @@ fn get_type(
             WatInstruction::I32GetS => Some(WasmType::I32),
             WatInstruction::I32GetU => Some(WasmType::I32),
             WatInstruction::RefCast(ty) => Some(ty.clone()),
-            WatInstruction::RefTest(_, _) => Some(WasmType::I32),
+            WatInstruction::RefTest(_) => Some(WasmType::I32),
         })
         .flatten()
 }
@@ -1329,10 +1330,30 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
         Some(LabelType::Memory)
     } else if module.globals.contains_key(&label) {
         Some(LabelType::Global)
-    } else if function.locals.contains_key(&label) {
+    } else if function.locals.contains_key(&label)
+        || function
+            .params
+            .iter()
+            .any(|(name, _)| name.as_ref() == label)
+    {
         Some(LabelType::Local)
     } else {
         None
+    }
+}
+
+fn get_var_instruction(
+    module: &WatModule,
+    function: &WatFunction,
+    label: &str,
+) -> Option<WatInstruction> {
+    match get_label_type(module, function, label) {
+        Some(label_type) => match label_type {
+            LabelType::Global => Some(WatInstruction::global_get(label)),
+            LabelType::Local => Some(WatInstruction::local_get(label)),
+            LabelType::Memory => None,
+        },
+        None => None,
     }
 }
 
@@ -1741,7 +1762,17 @@ fn translate_expression(
                             ));
                         }
                     },
-                    WasmType::Anyref => todo!("as anyref"),
+                    WasmType::Anyref => match &target_type {
+                        WasmType::Ref(_, _) => {
+                            current_block.push(WatInstruction::ref_cast(target_type));
+                        }
+                        t => {
+                            return Err(syn::Error::new_spanned(
+                                &expr_cast.expr,
+                                format!("Can't convert between ref anyref and {t}"),
+                            ));
+                        }
+                    },
                     WasmType::Ref(name, nullable) => match &target_type {
                         WasmType::Ref(to_name, to_nullable) => {
                             if &name != to_name {
@@ -1893,7 +1924,16 @@ fn translate_expression(
         Expr::Let(_) => todo!("translate_expression: Expr::Let(_) "),
         Expr::Lit(expr_lit) => translate_lit(module, function, current_block, &expr_lit.lit, ty)?,
         Expr::Loop(_) => todo!("translate_expression: Expr::Loop(_) "),
-        Expr::Macro(_) => todo!("translate_expression: Expr::Macro(_) "),
+        Expr::Macro(expr_macro) => {
+            translate_macro(
+                module,
+                function,
+                current_block,
+                &expr_macro.mac.path.segments[0].ident,
+                expr_macro.mac.tokens.clone(),
+                expr_macro.span(),
+            )?;
+        }
         Expr::Match(_) => todo!("translate_expression: Expr::Match(_) "),
         Expr::MethodCall(_) => todo!("translate_expression: Expr::MethodCall(_) "),
         Expr::Paren(_) => todo!("translate_expression: Expr::Paren(_) "),
@@ -2097,7 +2137,7 @@ impl ToTokens for OurWatInstruction {
             Call(name) => quote! { #w::Call(#name.to_string()) },
 
             I32Const(value) => quote! { #w::I32Const(#value) },
-            I64Const(value) => quote! { #w::I32Const(#value) },
+            I64Const(value) => quote! { #w::I64Const(#value) },
             F32Const(value) => quote! { #w::F32Const(#value) },
             F64Const(value) => quote! { #w::F64Const(#value) },
 
@@ -2316,10 +2356,10 @@ impl ToTokens for OurWatInstruction {
                     #w::RefCast(#ty)
                 }
             }
-            RefTest(name, ty) => {
+            RefTest(ty) => {
                 let ty = OurWasmType(ty.clone());
                 quote! {
-                    #w::RefTest(#name.to_string(), #ty)
+                    #w::RefTest(#ty)
                 }
             }
         };
@@ -2470,6 +2510,97 @@ fn translate_pat_type(
     }
 }
 
+fn translate_macro(
+    module: &mut WatModule,
+    function: &mut WatFunction,
+    instructions: &mut InstructionsList,
+    ident: &Ident,
+    tokens: TokenStream2,
+    macro_span: Span,
+) -> Result<()> {
+    let name = ident.to_string();
+    match name.as_ref() {
+        "len" => {
+            let expr: Expr = ::syn::parse::Parser::parse2(Expr::parse, tokens)?;
+            if let Expr::Path(expr_path) = expr {
+                let name = format!("${}", expr_path.path.segments[0].ident);
+                let label_type = get_label_type(module, function, &name);
+                match label_type {
+                    Some(label_type) => match label_type {
+                        LabelType::Global => instructions.push(WatInstruction::GlobalGet(name)),
+                        LabelType::Local => instructions.push(WatInstruction::LocalGet(name)),
+                        LabelType::Memory => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a memory",
+                            ))
+                        }
+                    },
+                    None => return Err(syn::Error::new(macro_span, "{name} variable not found")),
+                }
+                instructions.push(WatInstruction::ArrayLen);
+            } else {
+                return Err(syn::Error::new(
+                    macro_span,
+                    "The len!() macro expects an identifier, for example len!(x);",
+                ));
+            }
+        }
+        "ref_test" => {
+            // There will be some hackery here. I don't really want to write my own parser,
+            // so I'm treating the tokens in between parens as a `let foo: Type` statement.
+            // I still expect it as two arguments, so first I'll convert `foo, Type` into a
+            // proper form
+            let a_let = vec![TokenTree::Ident(Ident::new("let", Span::call_site()))].into_iter();
+            let tokens = tokens.into_iter().map(|t| {
+                if t.to_string() == "," {
+                    TokenTree::Punct(Punct::new(':', Spacing::Alone))
+                } else {
+                    t
+                }
+            });
+            let semi = vec![TokenTree::Punct(Punct::new(';', Spacing::Alone))].into_iter();
+            let tokens = TokenStream2::from_iter(a_let.chain(tokens).chain(semi));
+
+            let stmt: Stmt = ::syn::parse::Parser::parse2(Stmt::parse, tokens)?;
+            if let Stmt::Local(Local {
+                pat: syn::Pat::Type(pat_type),
+                ..
+            }) = stmt
+            {
+                let (name, ty) = translate_pat_type(function, &pat_type);
+                if let Some(ty) = ty {
+                    instructions.push(get_var_instruction(module, function, &name).ok_or(
+                        syn::Error::new_spanned(
+                            pat_type,
+                            format!("Coudln't find {name} local or global"),
+                        ),
+                    )?);
+                    instructions.push(WatInstruction::ref_test(ty));
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        pat_type,
+                        "Type has to be given as the second argument for ref_test! macro",
+                    ));
+                }
+            } else {
+                return Err(syn::Error::new(
+                            macro_span,
+                            "Invalid arguments for the ref_test! macro. The first argument has to be an identifier of a variable. The second argument must be a type"
+                        ));
+            }
+        }
+        _ => {
+            return Err(syn::Error::new(
+                macro_span,
+                format!("Undefined macro {name}"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn translate_statement(
     module: &mut WatModule,
     function: &mut WatFunction,
@@ -2535,91 +2666,14 @@ fn translate_statement(
             translate_expression(module, function, instructions, expr, *semi, None)?;
         }
         Stmt::Macro(stmt_macro) => {
-            let name = stmt_macro.mac.path.segments[0].ident.to_string();
-            match name.as_ref() {
-                "len" => {
-                    let expr: Expr =
-                        ::syn::parse::Parser::parse2(Expr::parse, stmt_macro.mac.tokens.clone())?;
-                    if let Expr::Path(expr_path) = expr {
-                        let name = format!("${}", expr_path.path.segments[0].ident);
-                        let label_type = get_label_type(module, function, &name);
-                        match label_type {
-                            Some(label_type) => match label_type {
-                                LabelType::Global => {
-                                    instructions.push(WatInstruction::GlobalGet(name))
-                                }
-                                LabelType::Local => {
-                                    instructions.push(WatInstruction::LocalGet(name))
-                                }
-                                LabelType::Memory => {
-                                    return Err(syn::Error::new_spanned(
-                                        stmt_macro,
-                                        "Can't get a length of a memory",
-                                    ))
-                                }
-                            },
-                            None => {
-                                return Err(syn::Error::new_spanned(
-                                    stmt_macro,
-                                    "{name} variable not found",
-                                ))
-                            }
-                        }
-                        instructions.push(WatInstruction::ArrayLen);
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            stmt_macro,
-                            "The len!() macro expects an identifier, for example len!(x);",
-                        ));
-                    }
-                }
-                "ref_test" => {
-                    // There will be some hackery here. I don't really want to write my own parser,
-                    // so I'm treating the tokens in between parens as a `let foo: Type` statement.
-                    // I still expect it as two arguments, so first I'll convert `foo, Type` into a
-                    // proper form
-                    let a_let =
-                        vec![TokenTree::Ident(Ident::new("let", Span::call_site()))].into_iter();
-                    let tokens = stmt_macro.mac.tokens.clone().into_iter().map(|t| {
-                        if t.to_string() == "," {
-                            TokenTree::Punct(Punct::new(':', Spacing::Alone))
-                        } else {
-                            t
-                        }
-                    });
-                    let semi = vec![TokenTree::Punct(Punct::new(';', Spacing::Alone))].into_iter();
-                    let tokens = TokenStream2::from_iter(a_let.chain(tokens).chain(semi));
-
-                    let stmt: Stmt = ::syn::parse::Parser::parse2(Stmt::parse, tokens)?;
-                    if let Stmt::Local(Local {
-                        pat: syn::Pat::Type(pat_type),
-                        ..
-                    }) = stmt
-                    {
-                        println!("pat_type: {pat_type:#?}");
-                        let (name, ty) = translate_pat_type(function, &pat_type);
-                        if let Some(ty) = ty {
-                            instructions.push(WatInstruction::ref_test(name, ty));
-                        } else {
-                            return Err(syn::Error::new_spanned(
-                                pat_type,
-                                "Type has to be given as the second argument for ref_test! macro",
-                            ));
-                        }
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            stmt_macro,
-                            "Invalid arguments for the ref_test! macro. The first argument has to be an identifier of a variable. The second argument must be a type"
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(syn::Error::new_spanned(
-                        stmt_macro,
-                        format!("Undefined macro {name}"),
-                    ));
-                }
-            }
+            translate_macro(
+                module,
+                function,
+                instructions,
+                &stmt_macro.mac.path.segments[0].ident,
+                stmt_macro.mac.tokens.clone(),
+                stmt_macro.span(),
+            )?;
         }
     }
 
