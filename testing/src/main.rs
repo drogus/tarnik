@@ -11,42 +11,24 @@ fn main() {
         #[import("wasi_snapshot_preview1", "fd_read")]
         fn read(fd: i32, iov_start: i32, iov_len: i32, nread: i32) -> i32;
 
-        type ImmutableString = [i8];
+        struct HashMapEntry {
+            key: i32,
+            value: anyref
+        }
+        type EntriesArray = [mut Nullable<HashMapEntry>];
+        struct HashMap {
+            entries: mut EntriesArray,
+            size: mut i32
+        }
 
-        type ExceptionType = fn(i32, i64);
-        tag!(Exception, ExceptionType);
+        static mut foo: HashMap = new_hashmap();
+
+        fn new_hashmap() -> HashMap {
+            return HashMap { entries: [null; 10], size: 0 };
+        }
 
         #[export("_start")]
         fn run() {
-            // we will read at most 100 chars into memory offset 20
-            memory[8] = 24;
-            memory[12] = 100;
-            let foo: i32 = read(0, 8, 1, 4);
-
-            let hello: ImmutableString = "Hello ";
-            let i: i32 = 1000;
-            for c in hello {
-                memory[i] = c;
-                i += 1;
-            }
-            // put exlamation mark at memory[500]
-            memory[500] = '!';
-
-            // store hello to iovectors
-            memory[0] = 1000;
-            memory[4] = i;
-            // memory[8] and memory[20] already have the read vector
-            // add vector for the exlamation mark
-            memory[16] = 500;
-            memory[20] = 1;
-
-            // `let: foo`` is small hack, if a function returns a value it needs to be somehow consumed
-            let foo: i32 = write(
-                1, // stdout
-                0, // io vectors start
-                3, // number of io vectors
-                50, // where to write the result
-            );
         }
     };
     module.add_import(

@@ -36,7 +36,7 @@ impl fmt::Display for StructField {
         } else {
             format!("{}", self.ty)
         };
-        writeln!(f, "(field {name} {ty}")
+        write!(f, "(field {name} {ty})")
     }
 }
 
@@ -181,11 +181,11 @@ impl fmt::Display for WasmType {
                 write!(f, "(array {m})")
             }
             WasmType::Struct(fields) => {
-                write!(f, "(struct")?;
+                writeln!(f, "(struct")?;
                 for field in fields {
-                    write!(f, "  {field}")?;
+                    writeln!(f, "  {field}")?;
                 }
-                write!(f, ")")
+                writeln!(f, ")")
             }
             WasmType::Func { name, signature } => {
                 let name = name.clone().unwrap_or_default();
@@ -196,7 +196,7 @@ impl fmt::Display for WasmType {
                 if let Some(result) = &signature.result {
                     write!(f, " (result {result})")?;
                 }
-                write!(f, ")")
+                writeln!(f, ")")
             }
             WasmType::Tag { name, signature } => {
                 write!(f, "(tag {name}")?;
@@ -206,7 +206,7 @@ impl fmt::Display for WasmType {
                 if let Some(result) = &signature.result {
                     write!(f, " (result {result})")?;
                 }
-                write!(f, ")")
+                writeln!(f, ")")
             }
         }
     }
@@ -249,9 +249,10 @@ pub enum WatInstruction {
     Nop,
     Local {
         name: String,
-        r#type: WasmType,
+        ty: WasmType,
     },
     GlobalGet(String),
+    GlobalSet(String),
     LocalGet(String),
     LocalSet(String),
     Call(String),
@@ -455,15 +456,19 @@ pub enum WatInstruction {
 }
 
 impl WatInstruction {
-    pub fn local(name: impl Into<String>, r#type: WasmType) -> Self {
+    pub fn local(name: impl Into<String>, ty: WasmType) -> Self {
         Self::Local {
             name: name.into(),
-            r#type,
+            ty,
         }
     }
 
     pub fn global_get(name: impl Into<String>) -> Self {
         Self::GlobalGet(name.into())
+    }
+
+    pub fn global_set(name: impl Into<String>) -> Self {
+        Self::GlobalSet(name.into())
     }
 
     pub fn local_get(name: impl Into<String>) -> Self {
@@ -731,8 +736,9 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64Load32U(label) => memory_op(f, "i64.load32_u", label),
 
             WatInstruction::Nop => Ok(()),
-            WatInstruction::Local { name, r#type } => writeln!(f, "(local {} {})", name, r#type),
+            WatInstruction::Local { name, ty } => writeln!(f, "(local {} {})", name, ty),
             WatInstruction::GlobalGet(name) => writeln!(f, "(global.get {})", name),
+            WatInstruction::GlobalSet(name) => writeln!(f, "(global.set {})", name),
             WatInstruction::LocalGet(name) => writeln!(f, "(local.get {})", name),
             WatInstruction::LocalSet(name) => writeln!(f, "(local.set {})", name),
             WatInstruction::Call(name) => writeln!(f, "(call {})", name),
@@ -742,7 +748,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::F32Const(value) => writeln!(f, "(f32.const {})", value),
             WatInstruction::F64Const(value) => writeln!(f, "(f64.const {})", value),
 
-            WatInstruction::StructNew(name) => write!(f, "(struct.new {})", name),
+            WatInstruction::StructNew(name) => writeln!(f, "(struct.new {})", name),
             WatInstruction::StructGet(name, field) => writeln!(f, "(struct.get {name} {field})"),
             WatInstruction::StructSet(name, field) => writeln!(f, "(struct.set {name} {field})"),
             WatInstruction::ArrayNew(name) => writeln!(f, "(array.new {name})"),
@@ -761,7 +767,7 @@ impl fmt::Display for WatInstruction {
                     t => panic!("Can't generate ref.null from {t:#?}"),
                 };
 
-                write!(f, "(ref.null {ty_str})")
+                writeln!(f, "(ref.null {ty_str})")
             }
             WatInstruction::RefFunc(name) => writeln!(f, "(ref.func ${})", name),
             WatInstruction::Return => writeln!(f, "return"),
@@ -830,31 +836,35 @@ impl fmt::Display for WatInstruction {
                     .map(|i| i.to_string())
                     .collect::<Vec<String>>()
                     .join("");
-                writeln!(
-                    f,
-                    "\ntry\n{try_block_str}\n{}{}end",
-                    catches
-                        .iter()
-                        .map(|(name, c)| format!(
+
+                let catches_str = catches
+                    .iter()
+                    .map(|(name, c)| {
+                        format!(
                             "catch {name}\n{}",
                             c.iter()
                                 .map(|i| i.to_string())
                                 .collect::<Vec<String>>()
                                 .join("")
-                        ))
-                        .collect::<Vec<String>>()
-                        .join(""),
-                    catch_all
-                        .clone()
-                        .map(|c| format!(
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join("");
+
+                let catch_all_str = catch_all
+                    .clone()
+                    .map(|c| {
+                        format!(
                             "catch_all\n{}",
                             c.iter()
                                 .map(|i| i.to_string())
                                 .collect::<Vec<String>>()
                                 .join("")
-                        ))
-                        .unwrap_or("".to_string())
-                )
+                        )
+                    })
+                    .unwrap_or("".to_string());
+
+                writeln!(f, "try\n{try_block_str}{catches_str}{catch_all_str}end")
             }
             WatInstruction::Catch(label, instr) => {
                 let instr_str = instr
@@ -981,6 +991,10 @@ impl WatFunction {
     pub fn has_results(&self) -> bool {
         !self.results.is_empty()
     }
+
+    pub fn add_result(&mut self, ty: WasmType) {
+        self.results.push(ty);
+    }
 }
 
 impl fmt::Display for WatFunction {
@@ -1007,6 +1021,14 @@ impl fmt::Display for WatFunction {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Global {
+    pub name: String,
+    pub ty: WasmType,
+    pub init: Box<WatInstruction>,
+    pub mutable: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WatModule {
     pub tags: IndexMap<String, String>,
@@ -1015,7 +1037,7 @@ pub struct WatModule {
     pub functions: Vec<WatFunction>,
     // TODO: changet it to a struct
     pub exports: Vec<(String, String, String)>,
-    pub globals: HashMap<String, (WasmType, WatInstruction)>,
+    pub globals: HashMap<String, Global>,
     pub data: Vec<(usize, String)>,
     pub data_offset: usize,
     pub data_offsets: HashMap<String, usize>,
@@ -1140,8 +1162,15 @@ impl fmt::Display for WatModule {
         }
 
         // Globals
-        for (name, (type_, init)) in &self.globals {
-            writeln!(f, "  (global ${} {} {})", name, type_, init)?;
+        for (name, global) in &self.globals {
+            let ty = &global.ty;
+            let init = &global.init;
+            let ty_str = if global.mutable {
+                format!("(mut {ty})")
+            } else {
+                format!("{ty}")
+            };
+            writeln!(f, "  (global {name} {ty_str} {init})")?;
         }
 
         // Function declarations

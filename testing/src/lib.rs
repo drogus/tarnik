@@ -8,6 +8,23 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_global() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            static mut foo: i64 = 10;
+
+            fn run() {
+                foo += 34;
+                assert(foo == 44, "global foo should");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_try_catch() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type ExceptionType = fn(i32, i64);

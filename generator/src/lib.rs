@@ -22,7 +22,8 @@ use quote::{quote, ToTokens};
 use syn::{braced, parenthesized, parse_macro_input, Ident, Result, Stmt, Token};
 
 use tarnik_ast::{
-    InstructionsList, Signature, StructField, WasmType, WatFunction, WatInstruction, WatModule,
+    Global, InstructionsList, Signature, StructField, WasmType, WatFunction, WatInstruction,
+    WatModule,
 };
 
 #[derive(Debug, Clone)]
@@ -262,6 +263,55 @@ impl Parse for GlobalScope {
                 if input.peek(token::Semi) {
                     let _: token::Semi = input.parse()?;
                 }
+            } else if input.peek(Token![static]) {
+                let _: Token![static] = input.parse()?;
+
+                let mutable = if input.peek(Token![mut]) {
+                    let _: Token![mut] = input.parse()?;
+                    true
+                } else {
+                    false
+                };
+
+                let ident: Ident = input.parse()?;
+
+                let _: Token![:] = input.parse()?;
+
+                let ty = parse_type(&mut input)?;
+
+                let _: Token![=] = input.parse()?;
+
+                let expr: Expr = input.parse()?;
+
+                let _: Token![;] = input.parse()?;
+
+                let mut init = Vec::new();
+                translate_expression(
+                    &mut module,
+                    &mut WatFunction::new("dummy"),
+                    &mut init,
+                    &expr,
+                    None,
+                    Some(&ty),
+                )?;
+
+                if init.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        expr,
+                        "global init has to have only one instruction. if you need more consider creating a function",
+                    ));
+                }
+
+                let name = format!("${}", ident);
+                module.globals.insert(
+                    name.clone(),
+                    Global {
+                        name,
+                        ty,
+                        init: Box::new(init[0].clone()),
+                        mutable,
+                    },
+                );
             } else {
                 let attr = input.call(Attribute::parse_outer)?;
                 println!("attr: {attr:#?}");
@@ -1013,9 +1063,16 @@ fn get_type(
             WatInstruction::Local { .. } => {
                 todo!("WatInstruction::Local: WatInstruction::Local ")
             }
-            WatInstruction::GlobalGet(_) => {
-                todo!("WatInstruction::Local: WatInstruction::GlobalGet(_) ")
-            }
+            WatInstruction::GlobalGet(name) => Some(
+                module
+                    .globals
+                    .get(name)
+                    .ok_or(anyhow!("Could not find local {name}"))
+                    .unwrap()
+                    .clone()
+                    .ty,
+            ),
+            WatInstruction::GlobalSet(name) => None,
             // TODO: Handle non existent local
             WatInstruction::LocalGet(name) => Some(
                 function
@@ -1501,6 +1558,27 @@ fn get_var_instruction(
     }
 }
 
+fn set_var_instruction(
+    module: &WatModule,
+    function: &WatFunction,
+    label: &str,
+) -> Option<WatInstruction> {
+    let label = if !label.starts_with("$") {
+        format!("${label}")
+    } else {
+        label.into()
+    };
+
+    match get_label_type(module, function, &label) {
+        Some(label_type) => match label_type {
+            LabelType::Global => Some(WatInstruction::global_set(label)),
+            LabelType::Local => Some(WatInstruction::local_set(label)),
+            LabelType::Memory => None,
+        },
+        None => None,
+    }
+}
+
 // TODO: the passing of all of those details is getting ridiculous. I would like to rewrite
 // these functions to work on a struct that keeps all the details within a struct, so that
 // I don't have to pass everything to each subsequent function call
@@ -1630,7 +1708,13 @@ fn translate_expression(
                         None,
                         Some(&local_type),
                     )?;
-                    current_block.push(WatInstruction::local_set(path));
+                    let instr = set_var_instruction(module, function, &path).ok_or(
+                        syn::Error::new_spanned(
+                            expr_path,
+                            format!("Couldn't find {path} local or global"),
+                        ),
+                    )?;
+                    current_block.push(instr);
                 }
                 Expr::Field(expr_field) => match &*expr_field.base {
                     Expr::Path(expr_path) => {
@@ -1728,7 +1812,12 @@ fn translate_expression(
                     // TODO: handle memories here
                     if let Expr::Path(path_expr) = binary.left.deref() {
                         let name = path_expr.path.segments[0].ident.to_string();
-                        current_block.push(WatInstruction::local_set(format!("${name}")));
+                        current_block.push(set_var_instruction(module, function, &name).ok_or(
+                            syn::Error::new_spanned(
+                                path_expr,
+                                format!("Couldn't find {name} local or global"),
+                            ),
+                        )?);
                     } else {
                         return Err(syn::Error::new_spanned(
                             binary,
@@ -2290,6 +2379,7 @@ impl ToTokens for OurWatInstruction {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Local ")
             }
             GlobalGet(name) => quote! { #w::GlobalGet(#name.to_string()) },
+            GlobalSet(name) => quote! { #w::GlobalSet(#name.to_string()) },
             LocalGet(name) => quote! { #w::LocalGet(#name.to_string()) },
             LocalSet(name) => quote! { #w::LocalSet(#name.to_string()) },
 
@@ -2571,6 +2661,13 @@ impl ToTokens for OurWatFunction {
             quote! { function.add_instruction(#instruction) }
         });
 
+        let results = wat_function.results.iter().map(|ty| {
+            let ty = OurWasmType(ty.clone());
+            quote! {
+                function.add_result(#ty)
+            }
+        });
+
         let locals = wat_function.locals.iter().map(|(name, ty)| {
             let ty = OurWasmType(ty.clone());
             quote! { function.add_local_exact(#name.to_string(), #ty) }
@@ -2580,6 +2677,7 @@ impl ToTokens for OurWatFunction {
             let mut function = tarnik_ast::WatFunction::new(#name);
 
             #(#params);*;
+            #(#results);*;
             #(#locals);*;
             #(#instructions);*;
         });
@@ -2591,23 +2689,20 @@ fn translate_type(ty: &Type) -> Option<WasmType> {
         syn::Type::Array(_) => {
             todo!("Stmt::Local(local): syn::Type::Array(_) ")
         }
-        syn::Type::BareFn(bare_fn) => {
-            dbg!(bare_fn);
-            Some(WasmType::Func {
-                name: None,
-                signature: Box::new(Signature {
-                    params: bare_fn
-                        .inputs
-                        .iter()
-                        .map(|i| translate_type(&i.ty).unwrap())
-                        .collect(),
-                    result: match &bare_fn.output {
-                        syn::ReturnType::Default => None,
-                        syn::ReturnType::Type(_, ty) => translate_type(ty.as_ref()),
-                    },
-                }),
-            })
-        }
+        syn::Type::BareFn(bare_fn) => Some(WasmType::Func {
+            name: None,
+            signature: Box::new(Signature {
+                params: bare_fn
+                    .inputs
+                    .iter()
+                    .map(|i| translate_type(&i.ty).unwrap())
+                    .collect(),
+                result: match &bare_fn.output {
+                    syn::ReturnType::Default => None,
+                    syn::ReturnType::Type(_, ty) => translate_type(ty.as_ref()),
+                },
+            }),
+        }),
         syn::Type::Group(_) => {
             todo!("Stmt::Local(local): syn::Type::Group(_) ")
         }
@@ -2851,7 +2946,12 @@ fn translate_statement(
                         Some(Semi::default()),
                         Some(&get_local_type(module, function, &name).unwrap()),
                     )?;
-                    instructions.push(WatInstruction::local_set(name));
+                    instructions.push(set_var_instruction(module, function, &name).ok_or(
+                        syn::Error::new_spanned(
+                            pat_ident,
+                            format!("Couldn't find {name} local or global"),
+                        ),
+                    )?);
                 }
             }
             syn::Pat::Lit(_) => todo!("Stmt::Local(local): syn::Pat::Lit(_) "),
@@ -3018,6 +3118,19 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             }
         });
 
+    let globals = global_scope
+        .module
+        .globals
+        .into_iter()
+        .map(|(name, global)| {
+            let ty = OurWasmType(global.ty);
+            let mutable = global.mutable;
+            let init = OurWatInstruction(*global.init.clone());
+            quote! {
+                module.globals.insert(#name.to_string(), tarnik_ast::Global { name: #name.to_string(), ty: #ty, mutable: #mutable, init: Box::new(#init) });
+            }
+        });
+
     let memories = global_scope
         .module
         .memories
@@ -3053,6 +3166,8 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             #(#memories)*
 
             #(#tags)*
+
+            #(#globals)*
 
             #(#functions)*
 
