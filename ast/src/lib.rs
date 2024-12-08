@@ -262,6 +262,7 @@ pub enum WatInstruction {
     LocalGet(String),
     LocalSet(String),
     Call(String),
+    CallRef(String),
 
     I32Const(i32),
     I64Const(i64),
@@ -492,6 +493,10 @@ impl WatInstruction {
 
     pub fn call(name: impl Into<String>) -> Self {
         Self::Call(name.into())
+    }
+
+    pub fn call_ref(name: impl Into<String>) -> Self {
+        Self::CallRef(name.into())
     }
 
     pub fn i32_const(value: i32) -> Self {
@@ -754,6 +759,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::LocalGet(name) => writeln!(f, "(local.get {})", name),
             WatInstruction::LocalSet(name) => writeln!(f, "(local.set {})", name),
             WatInstruction::Call(name) => writeln!(f, "(call {})", name),
+            WatInstruction::CallRef(name) => writeln!(f, "(call_ref {})", name),
 
             WatInstruction::I32Const(value) => writeln!(f, "(i32.const {})", value),
             WatInstruction::I64Const(value) => writeln!(f, "(i64.const {})", value),
@@ -781,7 +787,7 @@ impl fmt::Display for WatInstruction {
 
                 writeln!(f, "(ref.null {ty_str})")
             }
-            WatInstruction::RefFunc(name) => writeln!(f, "(ref.func ${})", name),
+            WatInstruction::RefFunc(name) => writeln!(f, "(ref.func {})", name),
             WatInstruction::Return => writeln!(f, "return"),
             WatInstruction::ReturnCall(name) => writeln!(f, "(return_call {name})"),
             WatInstruction::Block {

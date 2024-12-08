@@ -11,12 +11,21 @@ fn main() {
         #[import("wasi_snapshot_preview1", "fd_read")]
         fn read(fd: i32, iov_start: i32, iov_len: i32, nread: i32) -> i32;
 
-        type AnyrefArray = [mut anyref];
-        static mut foo: Nullable<AnyrefArray> = [null; 10];
+        type FooFunc = fn(i32) -> i32;
 
         #[export("_start")]
         fn run() {
+            let foo_ref: FooFunc = foo;
+
+            let y: i32 = foo_ref(33);
+
+            assert(y == 44, "it should be possible to call a func ref");
         }
+
+        fn foo(x: i32) -> i32 {
+            return x + 11;
+        }
+
     };
     module.add_import(
         "env",

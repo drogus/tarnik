@@ -53,24 +53,26 @@ struct Function {
 #[derive(Debug, Clone)]
 struct GlobalScope {
     module: WatModule,
+    functions: Vec<Function>,
 }
 
 impl GlobalScope {
     fn parse_function(
         &mut self,
-        mut input: &mut ParseStream,
+        input: &mut ParseStream,
         import_next: &mut Option<(String, String)>,
         export_next: &mut Option<String>,
     ) -> Result<()> {
-        let function = parse_function(&mut input)?;
+        let function = parse_function(input)?;
 
         if let Some(export_name) = export_next {
             self.module
                 .add_export(&*export_name, "func", format!("${}", function.name));
             *export_next = None;
 
-            let wat_function = self.function_to_wat(&function)?;
+            let wat_function = WatFunction::new(&function.name);
             self.module.functions.push(wat_function);
+            self.functions.push(function);
         } else if let Some((namespace, name)) = import_next {
             self.module.add_import(
                 &*namespace,
@@ -88,8 +90,9 @@ impl GlobalScope {
 
             *import_next = None;
         } else {
-            let wat_function = self.function_to_wat(&function)?;
+            let wat_function = WatFunction::new(&function.name);
             self.module.functions.push(wat_function);
+            self.functions.push(function);
         }
 
         Ok(())
@@ -97,10 +100,10 @@ impl GlobalScope {
 
     fn parse_type(
         &mut self,
-        mut input: &mut ParseStream,
+        input: &mut ParseStream,
         export_next: &mut Option<String>,
     ) -> Result<()> {
-        let (name, ty) = parse_type_def(&mut input)?;
+        let (name, ty) = parse_type_def(input)?;
         self.module
             .types
             .push(TypeDefinition::Type(name.clone(), ty));
@@ -430,9 +433,17 @@ impl Parse for GlobalScope {
     fn parse(mut input: ParseStream) -> Result<Self> {
         let mut global_scope = Self {
             module: WatModule::new(),
+            functions: Vec::new(),
         };
 
         global_scope.parse_global_statements(&mut input)?;
+
+        let mut wat_functions = Vec::new();
+        for function in global_scope.functions.clone() {
+            let wat_function = global_scope.function_to_wat(&function)?;
+            wat_functions.push(wat_function);
+        }
+        global_scope.module.functions = wat_functions;
 
         Ok(global_scope)
     }
@@ -1171,6 +1182,7 @@ fn get_type(
             ),
             WatInstruction::LocalSet(_) => todo!("get_type: WatInstruction::LocalSet(_)"),
             WatInstruction::Call(_) => todo!("get_type: WatInstruction::Call(_) "),
+            WatInstruction::CallRef(_) => todo!("get_type: WatInstruction::CallRef(_) "),
 
             WatInstruction::I32Const(_) => Some(WasmType::I32),
             WatInstruction::I64Const(_) => Some(WasmType::I64),
@@ -1591,6 +1603,7 @@ enum LabelType {
     Global,
     Local,
     Memory,
+    Func,
 }
 fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Option<LabelType> {
     let label = if !label.starts_with("$") {
@@ -1610,6 +1623,12 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
             .any(|(name, _)| name.as_ref() == label)
     {
         Some(LabelType::Local)
+    } else if module
+        .functions
+        .iter()
+        .any(|f| format!("${}", f.name) == label)
+    {
+        Some(LabelType::Func)
     } else {
         None
     }
@@ -1664,6 +1683,7 @@ fn get_var_instruction(
             LabelType::Global => Some(WatInstruction::global_get(label)),
             LabelType::Local => Some(WatInstruction::local_get(label)),
             LabelType::Memory => None,
+            LabelType::Func => Some(WatInstruction::ref_func(label)),
         },
         None => None,
     }
@@ -1685,6 +1705,7 @@ fn set_var_instruction(
             LabelType::Global => Some(WatInstruction::global_set(label)),
             LabelType::Local => Some(WatInstruction::local_set(label)),
             LabelType::Memory => None,
+            LabelType::Func => None,
         },
         None => None,
     }
@@ -1751,6 +1772,7 @@ fn translate_expression(
                                 current_block.push(WatInstruction::local_get(&target_name))
                             }
                             LabelType::Memory => {}
+                            LabelType::Func => panic!("Can't assign to a function"),
                         }
                         translate_expression(
                             module,
@@ -1802,6 +1824,7 @@ fn translate_expression(
                                     None => panic!("type has to be known for memory access"),
                                 }
                             }
+                            LabelType::Func => {}
                         }
                     } else {
                         // TODO: this should be tied to the code line
@@ -1997,7 +2020,54 @@ fn translate_expression(
                     for arg in &expr_call.args {
                         translate_expression(module, function, current_block, arg, None, ty)?;
                     }
-                    current_block.push(WatInstruction::call(format!("${}", func_name)));
+                    if let Some(label) = get_label_type(module, function, &func_name) {
+                        match label {
+                            LabelType::Global => {
+                                let ty = get_type_for_a_label(module, function, &func_name).ok_or(
+                                    syn::Error::new_spanned(
+                                        expr_call,
+                                        format!("Can't find reference {func_name}"),
+                                    ),
+                                )?;
+                                let func_type = if let WasmType::Ref(name, _) = ty {
+                                    name
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        expr_call,
+                                        "Can't get function type",
+                                    ));
+                                };
+                                current_block
+                                    .push(WatInstruction::global_get(format!("${}", func_name)));
+                                current_block.push(WatInstruction::call_ref(func_type));
+                            }
+                            LabelType::Local => {
+                                let ty = get_type_for_a_label(module, function, &func_name).ok_or(
+                                    syn::Error::new_spanned(
+                                        expr_call,
+                                        format!("Can't find reference {func_name}"),
+                                    ),
+                                )?;
+                                let func_type = if let WasmType::Ref(name, _) = ty {
+                                    name
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        expr_call,
+                                        "Can't get function type",
+                                    ));
+                                };
+                                current_block
+                                    .push(WatInstruction::local_get(format!("${}", func_name)));
+                                current_block.push(WatInstruction::call_ref(func_type));
+                            }
+                            LabelType::Memory => todo!(),
+                            LabelType::Func => {
+                                current_block.push(WatInstruction::call(format!("${}", func_name)));
+                            }
+                        }
+                    } else {
+                        current_block.push(WatInstruction::call(format!("${}", func_name)));
+                    }
                 }
             } else {
                 panic!("Only calling functions by path is supported at the moment");
@@ -2224,6 +2294,7 @@ fn translate_expression(
                     }
                     LabelType::Local => current_block.push(WatInstruction::local_get(&target_name)),
                     LabelType::Memory => {}
+                    LabelType::Func => panic!("can't index a function reference"),
                 }
                 translate_expression(
                     module,
@@ -2257,6 +2328,7 @@ fn translate_expression(
                             ))
                         }
                     },
+                    LabelType::Func => panic!("can't index a function reference"),
                 }
             } else {
                 return Err(syn::Error::new_spanned(
@@ -2540,6 +2612,7 @@ impl ToTokens for OurWatInstruction {
             LocalSet(name) => quote! { #w::LocalSet(#name.to_string()) },
 
             Call(name) => quote! { #w::Call(#name.to_string()) },
+            CallRef(name) => quote! { #w::CallRef(#name.to_string()) },
 
             I32Const(value) => quote! { #w::I32Const(#value) },
             I64Const(value) => quote! { #w::I64Const(#value) },
@@ -2566,8 +2639,8 @@ impl ToTokens for OurWatInstruction {
             Ref(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Ref(_) ")
             }
-            RefFunc(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefFunc(_) ")
+            RefFunc(name) => {
+                quote! { #w::RefFunc(#name.to_string()) }
             }
             Type(_) => {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Type(_) ")
@@ -3017,6 +3090,12 @@ fn translate_macro(
                             return Err(syn::Error::new(
                                 macro_span,
                                 "Can't get a length of a memory",
+                            ))
+                        }
+                        LabelType::Func => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a function reference",
                             ))
                         }
                     },

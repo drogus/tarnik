@@ -8,6 +8,30 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_ref_func() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type FooFunc = fn(i32) -> i32;
+
+            fn run() {
+                let foo_ref: FooFunc = foo;
+
+                let y: i32 = foo_ref(33);
+
+                assert(y == 44, "it should be possible to call a func ref");
+            }
+
+            fn foo(x: i32) -> i32 {
+                return x + 11;
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_global_array() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type Arr = [Nullable<anyref>];
