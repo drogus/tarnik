@@ -15,17 +15,15 @@ fn main() {
 
         #[export("_start")]
         fn run() {
-            let foo_ref: FooFunc = foo;
+            let offset1: i32 = data!("foo");
+            let offset2: i32 = data!("bar");
+            let offset3: i32 = data!("foo");
 
-            let y: i32 = foo_ref(33);
-
-            assert(y == 44, "it should be possible to call a func ref");
+            assert(offset1 == offset3, "data entries should not add a new entry if one exists");
+            assert(memory[offset2] == 'b', "offset should point at the data");
+            assert(memory[offset2 + 1] == 'a', "offset should point at the data");
+            assert(memory[offset2 + 2] == 'r', "offset should point at the data");
         }
-
-        fn foo(x: i32) -> i32 {
-            return x + 11;
-        }
-
     };
     module.add_import(
         "env",

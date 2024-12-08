@@ -8,6 +8,29 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_data() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            memory!("memory", 1);
+
+            fn run() {
+                let offset1: i32 = data!("foo");
+                let offset2: i32 = data!("bar");
+                let offset3: i32 = data!("foo");
+
+                assert(offset1 == offset3, "data entries should not add a new entry if one exists");
+                assert(memory[offset2] == 'b', "offset should point at the data");
+                assert(memory[offset2 + 1] == 'a', "offset should point at the data");
+                assert(memory[offset2 + 2] == 'r', "offset should point at the data");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_ref_func() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             type FooFunc = fn(i32) -> i32;

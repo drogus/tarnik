@@ -8,8 +8,8 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     token::{self, Brace, Semi},
-    Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop, ExprUnary, Lit, Local, Meta, Pat,
-    PatType, Type,
+    Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop, ExprUnary, Lit, LitStr, Local, Meta,
+    Pat, PatType, Type,
 };
 
 extern crate proc_macro;
@@ -2322,10 +2322,8 @@ fn translate_expression(
                         }
                         Some(_) => todo!(),
                         None => {
-                            return Err(syn::Error::new_spanned(
-                                expr,
-                                "Couldn't figure out type for memory access",
-                            ))
+                            // default to i32
+                            current_block.push(WatInstruction::I32Load(target_name.into()));
                         }
                     },
                     LabelType::Func => panic!("can't index a function reference"),
@@ -3048,6 +3046,18 @@ fn translate_macro(
 ) -> Result<()> {
     let name = ident.to_string();
     match name.as_ref() {
+        "data" => {
+            ::syn::parse::Parser::parse2(
+                |input: ParseStream<'_>| {
+                    let data_string: LitStr = input.parse()?;
+                    let (offset, _) = module.add_data(data_string.value());
+                    instructions.push(WatInstruction::I32Const(offset as i32));
+
+                    Ok(())
+                },
+                tokens.clone(),
+            )?;
+        }
         "throw" => {
             ::syn::parse::Parser::parse2(
                 |input: ParseStream<'_>| {

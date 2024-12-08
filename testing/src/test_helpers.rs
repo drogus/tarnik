@@ -18,7 +18,9 @@ impl TestRunner {
     pub fn run_wasm_test(&self, module: WatModule) -> Result<(i32, String, String)> {
         // Add standard exports/imports
         let mut module = module;
-        module.add_memory("$memory", 1, None);
+        if !module.memories.contains_key("$memory") {
+            module.add_memory("$memory", 1, None);
+        }
         module.add_export("memory", "memory", "$memory");
         module.add_export("_start", "func", "$run");
         module.add_import(
