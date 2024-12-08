@@ -8,6 +8,24 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_global_null() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            struct Foo {}
+            static foo: Nullable<Foo> = null;
+
+            fn run() {
+                let is_null: i32 = ref_test!(foo, null);
+                assert(is_null == 1, "global should be set to null");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_global() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             static mut foo: i64 = 10;

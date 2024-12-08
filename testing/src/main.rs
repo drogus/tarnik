@@ -11,14 +11,16 @@ fn main() {
         #[import("wasi_snapshot_preview1", "fd_read")]
         fn read(fd: i32, iov_start: i32, iov_len: i32, nread: i32) -> i32;
 
-        struct HashMapEntry {
-            key: i32,
-            value: anyref
-        }
-        type EntriesArray = [mut Nullable<HashMapEntry>];
-        struct HashMap {
-            entries: mut EntriesArray,
-            size: mut i32
+        rec! {
+            struct HashMapEntry {
+                key: i32,
+                value: anyref
+            }
+            type EntriesArray = [mut Nullable<HashMapEntry>];
+            struct HashMap {
+                entries: mut EntriesArray,
+                size: mut i32
+            }
         }
 
         static mut foo: HashMap = new_hashmap();

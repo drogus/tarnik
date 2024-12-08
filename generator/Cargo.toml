@@ -11,9 +11,9 @@ repository = "https://github.com/drogus/tarnik"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-proc-macro2 = "1.0"
-quote = "1.0"
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = "1.0.92"
+quote = "1.0.37"
+syn = { version = "2.0.90", features = ["full", "extra-traits"] }
 convert_case = "0.6"
 tarnik-ast.workspace = true
 regex = "1"

@@ -1029,10 +1029,31 @@ pub struct Global {
     pub mutable: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum TypeDefinition {
+    Rec(Vec<(String, WasmType)>),
+    Type(String, WasmType),
+}
+
+impl fmt::Display for TypeDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeDefinition::Rec(types) => {
+                writeln!(f, "(rec")?;
+                for (name, ty) in types {
+                    writeln!(f, "(type {name} {ty})")?;
+                }
+                writeln!(f, ")")
+            }
+            TypeDefinition::Type(name, ty) => writeln!(f, "(type {name} {ty})"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WatModule {
     pub tags: IndexMap<String, String>,
-    pub types: IndexMap<String, WasmType>,
+    pub types: Vec<TypeDefinition>,
     pub imports: Vec<(String, String, WasmType)>,
     pub functions: Vec<WatFunction>,
     // TODO: changet it to a struct
@@ -1048,7 +1069,7 @@ impl WatModule {
     pub fn new() -> Self {
         WatModule {
             tags: IndexMap::new(),
-            types: IndexMap::new(),
+            types: Vec::new(),
             imports: Vec::new(),
             functions: Vec::new(),
             exports: Vec::new(),
@@ -1069,7 +1090,7 @@ impl WatModule {
     }
 
     pub fn add_type(&mut self, name: impl Into<String>, ty: WasmType) {
-        self.types.insert(name.into(), ty);
+        self.types.push(TypeDefinition::Type(name.into(), ty));
     }
 
     pub fn add_data(&mut self, content: String) -> (usize, usize) {
@@ -1113,6 +1134,27 @@ impl WatModule {
     ) {
         self.imports.push((namespace.into(), name.into(), ty));
     }
+
+    pub fn get_type_by_name(&self, search_name: &str) -> Option<WasmType> {
+        for ty in &self.types {
+            match ty {
+                TypeDefinition::Rec(types) => {
+                    for (name, ty) in types {
+                        if search_name == name {
+                            return Some(ty.clone());
+                        }
+                    }
+                }
+                TypeDefinition::Type(name, ty) => {
+                    if search_name == name {
+                        return Some(ty.clone());
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 impl fmt::Display for WatModule {
@@ -1134,8 +1176,8 @@ impl fmt::Display for WatModule {
         }
 
         // Types
-        for (name, ty) in &self.types {
-            writeln!(f, "  (type {name} {ty})")?;
+        for ty in &self.types {
+            writeln!(f, "  {ty}")?;
         }
 
         // Tags

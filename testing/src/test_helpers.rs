@@ -36,7 +36,7 @@ impl TestRunner {
         // Write WAT file
         let wat_path = self.temp_dir.path().join("test.wat");
         fs::write(&wat_path, module.to_string())?;
-        // println!("{module}");
+        println!("{module}");
 
         // Convert WAT to WASM
         let wasm_path = self.temp_dir.path().join("test.wasm");
