@@ -40,9 +40,9 @@ impl fmt::Display for StructField {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct Signature {
-    pub params: Vec<WasmType>,
+    pub params: Vec<(Option<String>, WasmType)>,
     pub result: Option<WasmType>,
 }
 
@@ -152,7 +152,11 @@ impl WasmType {
         }
     }
 
-    pub fn func(name: Option<String>, params: Vec<WasmType>, result: Option<WasmType>) -> WasmType {
+    pub fn func(
+        name: Option<String>,
+        params: Vec<(Option<String>, WasmType)>,
+        result: Option<WasmType>,
+    ) -> WasmType {
         WasmType::Func {
             name,
             signature: Box::new(Signature { params, result }),
@@ -190,8 +194,9 @@ impl fmt::Display for WasmType {
             WasmType::Func { name, signature } => {
                 let name = name.clone().unwrap_or_default();
                 write!(f, "(func {name}")?;
-                for param in &signature.params {
-                    write!(f, " (param {param})")?;
+                for (name, ty) in &signature.params {
+                    let param_name = name.clone().unwrap_or_default();
+                    write!(f, " (param {param_name} {ty})")?;
                 }
                 if let Some(result) = &signature.result {
                     write!(f, " (result {result})")?;
@@ -200,8 +205,9 @@ impl fmt::Display for WasmType {
             }
             WasmType::Tag { name, signature } => {
                 write!(f, "(tag {name}")?;
-                for param in &signature.params {
-                    write!(f, " (param {param})")?;
+                for (name, ty) in &signature.params {
+                    let param_name = name.clone().unwrap_or_default();
+                    write!(f, " (param {param_name} {ty})")?;
                 }
                 if let Some(result) = &signature.result {
                     write!(f, " (result {result})")?;
@@ -427,6 +433,7 @@ pub enum WatInstruction {
     ReturnCall(String),
     Block {
         label: String,
+        signature: Signature,
         instructions: InstructionsList,
     },
     Loop {
@@ -555,9 +562,14 @@ impl WatInstruction {
         Self::ReturnCall(name.into())
     }
 
-    pub fn block(label: impl Into<String>, instructions: InstructionsList) -> Self {
+    pub fn block(
+        label: impl Into<String>,
+        signature: Signature,
+        instructions: InstructionsList,
+    ) -> Self {
         Self::Block {
             label: label.into(),
+            signature,
             instructions,
         }
     }
@@ -774,6 +786,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::ReturnCall(name) => writeln!(f, "(return_call {name})"),
             WatInstruction::Block {
                 label,
+                signature,
                 instructions,
             } => {
                 writeln!(f, "(block {label}")?;
@@ -1025,7 +1038,7 @@ impl fmt::Display for WatFunction {
 pub struct Global {
     pub name: String,
     pub ty: WasmType,
-    pub init: Box<WatInstruction>,
+    pub init: Vec<WatInstruction>,
     pub mutable: bool,
 }
 
@@ -1175,14 +1188,14 @@ impl fmt::Display for WatModule {
             writeln!(f, "  (memory {label} {size} {max_size})")?;
         }
 
-        // Types
-        for ty in &self.types {
-            writeln!(f, "  {ty}")?;
-        }
-
         // Tags
         for (label, typeidx) in &self.tags {
             writeln!(f, "  (tag {label} (type {typeidx}))")?;
+        }
+
+        // Types
+        for ty in &self.types {
+            writeln!(f, "  {ty}")?;
         }
 
         // Data
@@ -1206,13 +1219,19 @@ impl fmt::Display for WatModule {
         // Globals
         for (name, global) in &self.globals {
             let ty = &global.ty;
-            let init = &global.init;
+            let init_instructions = global
+                .init
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<String>>()
+                .join(" ");
+
             let ty_str = if global.mutable {
                 format!("(mut {ty})")
             } else {
                 format!("{ty}")
             };
-            writeln!(f, "  (global {name} {ty_str} {init})")?;
+            writeln!(f, "  (global {name} {ty_str} {init_instructions})")?;
         }
 
         // Function declarations

@@ -77,7 +77,11 @@ impl GlobalScope {
                 &*name,
                 WasmType::func(
                     Some(format!("${}", function.name)),
-                    function.parameters.iter().map(|p| p.ty.clone()).collect(),
+                    function
+                        .parameters
+                        .iter()
+                        .map(|p| (Some(p.name.clone()), p.ty.clone()))
+                        .collect(),
                     function.return_type.clone(),
                 ),
             );
@@ -340,7 +344,7 @@ impl GlobalScope {
 
         let _: Token![:] = input.parse()?;
 
-        let ty = parse_type(&mut input)?;
+        let ty = parse_type(input)?;
 
         let _: Token![=] = input.parse()?;
 
@@ -358,20 +362,14 @@ impl GlobalScope {
             Some(&ty),
         )?;
 
-        if init.len() != 1 {
-            return Err(syn::Error::new_spanned(
-                        expr,
-                        "global init has to have only one instruction. if you need more consider creating a function",
-                    ));
-        }
-
         let name = format!("${}", ident);
+
         self.module.globals.insert(
             name.clone(),
             Global {
                 name,
                 ty,
-                init: Box::new(init[0].clone()),
+                init: init,
                 mutable,
             },
         );
@@ -1382,13 +1380,11 @@ fn get_struct_type(
 }
 
 fn get_array_type(
-    _module: &WatModule,
+    module: &WatModule,
     function: &WatFunction,
     name: &str,
 ) -> anyhow::Result<String> {
-    let ty = function
-        .locals
-        .get(name)
+    let ty = get_type_for_a_label(module, function, name)
         .ok_or(anyhow!("Couldn't find array with name {name}"))?;
 
     match ty {
@@ -1397,16 +1393,13 @@ fn get_array_type(
     }
 }
 
-// TODO: handle globals too
-fn get_local_type(
-    _module: &WatModule,
+fn get_var_type(
+    module: &WatModule,
     function: &WatFunction,
     name: &str,
 ) -> anyhow::Result<WasmType> {
-    let ty = function
-        .locals
-        .get(name)
-        .ok_or(anyhow!("Could not find local {name}"))?;
+    let ty = get_type_for_a_label(module, function, name)
+        .ok_or(anyhow!("Couldn't find local or a global with name {name}"))?;
 
     Ok(ty.clone())
 }
@@ -1528,7 +1521,7 @@ fn translate_for_loop(
 
     // // TODO: unique loop labels
     let loop_instr = WatInstruction::r#loop("$loop-label", instructions);
-    let block_instr = WatInstruction::block("$block-label", vec![loop_instr]);
+    let block_instr = WatInstruction::block("$block-label", Signature::default(), vec![loop_instr]);
 
     block.push(block_instr);
     //wat_function.body = instructions.into_iter().map(|i| Box::new(i)).collect();
@@ -1617,6 +1610,39 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
             .any(|(name, _)| name.as_ref() == label)
     {
         Some(LabelType::Local)
+    } else {
+        None
+    }
+}
+
+fn get_type_for_a_label(
+    module: &WatModule,
+    function: &WatFunction,
+    label: &str,
+) -> Option<WasmType> {
+    let label = if !label.starts_with("$") {
+        format!("${label}")
+    } else {
+        label.into()
+    };
+
+    if module.globals.contains_key(&label) {
+        module.globals.get(&label).map(|g| g.ty.clone())
+    } else if function.locals.contains_key(&label) {
+        function.locals.get(&label).cloned()
+    } else if function
+        .params
+        .iter()
+        .any(|(name, _)| name.as_ref() == label)
+    {
+        let ty = function
+            .params
+            .iter()
+            .find(|(name, _)| name.as_ref() == label)
+            .map(|(_, ty)| ty)
+            .cloned();
+
+        ty
     } else {
         None
     }
@@ -1784,14 +1810,14 @@ fn translate_expression(
                 }
                 Expr::Path(expr_path) => {
                     let path = format!("${}", expr_path.path.segments[0].ident);
-                    let local_type = get_local_type(module, function, &path).unwrap();
+                    let var_type = get_var_type(module, function, &path).unwrap();
                     translate_expression(
                         module,
                         function,
                         current_block,
                         expr_assign.right.deref(),
                         None,
-                        Some(&local_type),
+                        Some(&var_type),
                     )?;
                     let instr = set_var_instruction(module, function, &path).ok_or(
                         syn::Error::new_spanned(
@@ -2354,6 +2380,8 @@ struct OurWatFunction(WatFunction);
 #[derive(Debug)]
 struct OurWasmType(WasmType);
 #[derive(Debug)]
+struct OurSignature(Signature);
+#[derive(Debug)]
 struct OurWatInstruction(WatInstruction);
 
 impl ToTokens for OurWasmType {
@@ -2407,9 +2435,14 @@ impl ToTokens for OurWasmType {
                     quote! { None }
                 };
                 let params = signature.params.clone();
-                let params = params.iter().map(|param| {
-                    let param = OurWasmType(param.clone());
-                    quote! { #param }
+                let params = params.iter().map(|(name, ty)| {
+                    let ty = OurWasmType(ty.clone());
+                    let name = if let Some(name) = &name {
+                        quote! { Some(#name.to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    quote! { (#name, #ty) }
                 });
 
                 quote! {
@@ -2427,9 +2460,14 @@ impl ToTokens for OurWasmType {
                     quote! { None }
                 };
                 let params = signature.params.clone();
-                let params = params.iter().map(|param| {
-                    let param = OurWasmType(param.clone());
-                    quote! { #param }
+                let params = params.iter().map(|(name, ty)| {
+                    let ty = OurWasmType(ty.clone());
+                    let name = if let Some(name) = &name {
+                        quote! { Some(#name.to_string()) }
+                    } else {
+                        quote! { None }
+                    };
+                    quote! { (#name, #ty) }
                 });
 
                 quote! {
@@ -2438,6 +2476,39 @@ impl ToTokens for OurWasmType {
             }
         };
         tokens.extend(tokens_str);
+    }
+}
+
+impl ToTokens for OurSignature {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let signature = &self.0;
+
+        let result_q = if let Some(result) = &signature.result {
+            let ty = OurWasmType(result.clone());
+            quote! { Some(#ty) }
+        } else {
+            quote! { None }
+        };
+
+        let params = signature.params.iter().map(|(maybe_name, ty)| {
+            let ty = OurWasmType(ty.clone());
+            let name_q = if let Some(name) = maybe_name {
+                quote! { Some(#name.to_string()) }
+            } else {
+                quote! { None }
+            };
+
+            quote! { (#name_q, #ty) }
+        });
+
+        let tokens_out = quote! {
+            tarnik_ast::Signature {
+                params: vec![#(#params),*],
+                result: #result_q,
+            }
+        };
+
+        tokens.extend(tokens_out);
     }
 }
 
@@ -2507,11 +2578,13 @@ impl ToTokens for OurWatInstruction {
             }
             Block {
                 label,
+                signature,
                 instructions,
             } => {
                 let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
+                let signature = OurSignature(signature.clone());
                 quote! {
-                    #w::block(#label, vec![#(#instructions),*])
+                    #w::block(#label, #signature, vec![#(#instructions),*])
                 }
             }
             Loop {
@@ -2780,7 +2853,7 @@ fn translate_type(ty: &Type) -> Option<WasmType> {
                 params: bare_fn
                     .inputs
                     .iter()
-                    .map(|i| translate_type(&i.ty).unwrap())
+                    .map(|i| (None, translate_type(&i.ty).unwrap()))
                     .collect(),
                 result: match &bare_fn.output {
                     syn::ReturnType::Default => None,
@@ -2838,9 +2911,10 @@ fn translate_type(ty: &Type) -> Option<WasmType> {
                 ("Nullable", Some(WasmType::Ref(ty, _))) => {
                     Some(WasmType::Ref(ty, tarnik_ast::Nullable::True))
                 }
-                ("Nullable", Some(_)) => {
-                    unimplemented!("Only ref types are nullable")
-                }
+                ("Nullable", Some(ty)) => match ty {
+                    WasmType::Anyref => Some(WasmType::Anyref),
+                    _ => unimplemented!("Only ref types are nullable"),
+                },
                 (_, Some(_)) => {
                     unimplemented!("Only Nullable is available as a wrapper type")
                 }
@@ -3029,7 +3103,7 @@ fn translate_statement(
                         instructions,
                         &init.expr,
                         Some(Semi::default()),
-                        Some(&get_local_type(module, function, &name).unwrap()),
+                        Some(&get_var_type(module, function, &name).unwrap()),
                     )?;
                     instructions.push(set_var_instruction(module, function, &name).ok_or(
                         syn::Error::new_spanned(
@@ -3229,9 +3303,9 @@ pub fn wasm(input: TokenStream) -> TokenStream {
         .map(|(name, global)| {
             let ty = OurWasmType(global.ty);
             let mutable = global.mutable;
-            let init = OurWatInstruction(*global.init.clone());
+            let init = global.init.iter().map(|i| OurWatInstruction(i.clone()));
             quote! {
-                module.globals.insert(#name.to_string(), tarnik_ast::Global { name: #name.to_string(), ty: #ty, mutable: #mutable, init: Box::new(#init) });
+                module.globals.insert(#name.to_string(), tarnik_ast::Global { name: #name.to_string(), ty: #ty, mutable: #mutable, init: vec![#(#init),*] });
             }
         });
 

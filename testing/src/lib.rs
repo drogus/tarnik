@@ -8,6 +8,25 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_global_array() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            type Arr = [Nullable<anyref>];
+            static foo: Arr = [null; 10];
+
+            fn run() {
+                let first_element: anyref = foo[0];
+                let is_null: i32 = ref_test!(first_element, null);
+                assert(is_null == 1, "array should be initialized and values should be null");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_global_null() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             struct Foo {}

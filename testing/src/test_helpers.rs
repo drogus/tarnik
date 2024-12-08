@@ -27,7 +27,7 @@ impl TestRunner {
             WasmType::Tag {
                 name: "$AssertException".to_string(),
                 signature: Box::new(Signature {
-                    params: vec![WasmType::I32, WasmType::I32],
+                    params: vec![(None, WasmType::I32), (None, WasmType::I32)],
                     result: None,
                 }),
             },
