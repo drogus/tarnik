@@ -13,16 +13,26 @@ fn main() {
 
         type FooFunc = fn(i32) -> i32;
 
+        type JSExceptionType = fn(anyref);
+        tag!(JSException, JSExceptionType);
+
         #[export("_start")]
         fn run() {
-            let offset1: i32 = data!("foo");
-            let offset2: i32 = data!("bar");
-            let offset3: i32 = data!("foo");
+            if 1 {
+                if 2 {
+                    try {
+                        try {
 
-            assert(offset1 == offset3, "data entries should not add a new entry if one exists");
-            assert(memory[offset2] == 'b', "offset should point at the data");
-            assert(memory[offset2 + 1] == 'a', "offset should point at the data");
-            assert(memory[offset2 + 2] == 'r', "offset should point at the data");
+                        }
+                        catch(JSException, error: anyref) {
+
+                        }
+                    }
+                    catch(JSException, error: anyref) {
+
+                    }
+                }
+            }
         }
     };
     module.add_import(

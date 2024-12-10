@@ -1104,6 +1104,18 @@ impl WatModule {
         self.functions.push(function);
     }
 
+    pub fn get_function(&self, name: &str) -> Option<&WatFunction> {
+        let name = if !name.starts_with("$") {
+            format!("${name}")
+        } else {
+            name.to_string()
+        };
+
+        self.functions
+            .iter()
+            .find(|f| format!("${}", f.name) == name)
+    }
+
     pub fn get_function_mut(&mut self, name: &str) -> Option<&mut WatFunction> {
         self.functions.iter_mut().find(|f| f.name == name)
     }

@@ -30,9 +30,18 @@ use tarnik_ast::{
 enum BodyElement {
     Statement(Stmt),
     TryCatch {
-        r#try: Vec<Stmt>,
-        catches: Vec<(Ident, Vec<Parameter>, Vec<Stmt>)>,
-        catch_all: Option<Vec<Stmt>>,
+        r#try: Vec<BodyElement>,
+        catches: Vec<(Ident, Vec<Parameter>, Vec<BodyElement>)>,
+        catch_all: Option<Vec<BodyElement>>,
+    },
+    If {
+        condition: Expr,
+        body: Vec<BodyElement>,
+        r#else: Option<Vec<BodyElement>>,
+    },
+    While {
+        condition: Expr,
+        body: Vec<BodyElement>,
     },
 }
 
@@ -70,7 +79,7 @@ impl GlobalScope {
                 .add_export(&*export_name, "func", format!("${}", function.name));
             *export_next = None;
 
-            let wat_function = WatFunction::new(&function.name);
+            let wat_function = self.function_to_wat_function_signature(&function)?;
             self.module.functions.push(wat_function);
             self.functions.push(function);
         } else if let Some((namespace, name)) = import_next {
@@ -90,7 +99,7 @@ impl GlobalScope {
 
             *import_next = None;
         } else {
-            let wat_function = WatFunction::new(&function.name);
+            let wat_function = self.function_to_wat_function_signature(&function)?;
             self.module.functions.push(wat_function);
             self.functions.push(function);
         }
@@ -414,11 +423,26 @@ impl GlobalScope {
             wat_function.add_param(format!("${}", param.name), &param.ty);
         }
 
+        wat_function.results = if let Some(result) = &function.return_type {
+            vec![result.clone()]
+        } else {
+            vec![]
+        };
+
         let mut instructions = Vec::new();
         for stmt in &function.body {
             translate_body_element(&mut self.module, &mut wat_function, &mut instructions, stmt)?;
         }
         wat_function.body = instructions.into();
+        Ok(wat_function)
+    }
+
+    fn function_to_wat_function_signature(&mut self, function: &Function) -> Result<WatFunction> {
+        let mut wat_function = WatFunction::new(&function.name);
+        for param in &function.parameters {
+            wat_function.add_param(format!("${}", param.name), &param.ty);
+        }
+
         wat_function.results = if let Some(result) = &function.return_type {
             vec![result.clone()]
         } else {
@@ -593,11 +617,11 @@ fn parse_function(input: &mut ParseStream) -> Result<Function> {
     while !content.is_empty() {
         let name: Ident = content.parse()?;
         let _: Token![:] = content.parse()?;
-        let ty: Ident = content.parse()?;
+        let ty = parse_type(&mut &content)?;
 
         parameters.push(Parameter {
             name: name.to_string(),
-            ty: ty.to_string().parse().unwrap(),
+            ty,
         });
 
         if !content.is_empty() {
@@ -614,100 +638,7 @@ fn parse_function(input: &mut ParseStream) -> Result<Function> {
     let mut body: Vec<BodyElement> = Vec::new();
 
     if input.peek(Brace) {
-        let content;
-        braced!(content in input);
-        while !content.is_empty() {
-            if content.peek(Token![try]) {
-                let try_token: Token![try] = content.parse()?;
-
-                let try_content;
-                braced!(try_content in content);
-                let mut try_statements = Vec::new();
-                while !try_content.is_empty() {
-                    let stmt: Stmt = try_content.parse()?;
-                    try_statements.push(stmt);
-                }
-
-                let mut catches = Vec::new();
-                let mut catch_all = None;
-
-                let mut go = true;
-                while go {
-                    let content_la = content.fork();
-                    if let Ok(potential_catch) = content_la.parse::<Ident>() {
-                        let pc_str = potential_catch.to_string();
-                        match pc_str.as_str() {
-                            "catch" => {
-                                let mut catch_statements = Vec::new();
-
-                                let _: Ident = content.parse()?;
-
-                                let catch_params;
-                                parenthesized!(catch_params in content);
-
-                                let error_type: Ident = catch_params.parse()?;
-
-                                let mut params: Vec<Parameter> = Vec::new();
-                                if catch_params.peek(Token![,]) {
-                                    let _: Token![,] = catch_params.parse()?;
-
-                                    let punctuated =
-                                        catch_params.parse_terminated(parse_param, Token![,])?;
-
-                                    for param in punctuated.into_iter() {
-                                        params.push(param);
-                                    }
-                                }
-
-                                let catch_content;
-                                braced!(catch_content in content);
-
-                                while !catch_content.is_empty() {
-                                    let stmt: Stmt = catch_content.parse()?;
-                                    catch_statements.push(stmt);
-                                }
-
-                                catches.push((error_type, params, catch_statements));
-                            }
-                            "catch_all" => {
-                                let _: Ident = content.parse()?;
-                                let mut catch_statements = Vec::new();
-                                let catch_content;
-                                braced!(catch_content in content);
-
-                                while !catch_content.is_empty() {
-                                    let stmt: Stmt = catch_content.parse()?;
-                                    catch_statements.push(stmt);
-                                }
-
-                                catch_all = Some(catch_statements);
-                            }
-                            _ => go = false,
-                        }
-                    } else {
-                        go = false;
-                    }
-                }
-
-                if !catches.is_empty() || catch_all.is_some() {
-                    let elem = BodyElement::TryCatch {
-                        r#try: try_statements,
-                        catches,
-                        catch_all,
-                    };
-                    body.push(elem);
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        try_token,
-                        "try requires catch or catch_all",
-                    ));
-                }
-            } else {
-                let stmt: Stmt = content.parse()?;
-                body.push(BodyElement::Statement(stmt));
-            }
-        }
-        // body = content.call(syn::Block::parse_within)?;
+        parse_code_block(input, &mut body)?;
     } else {
         let _: Token![;] = input.parse()?;
     }
@@ -720,6 +651,142 @@ fn parse_function(input: &mut ParseStream) -> Result<Function> {
     };
 
     Ok(f)
+}
+
+fn parse_code_block(input: &mut ParseStream, body: &mut Vec<BodyElement>) -> Result<()> {
+    let content;
+    braced!(content in input);
+    while !content.is_empty() {
+        if content.peek(Token![try]) {
+            let try_token: Token![try] = content.parse()?;
+
+            let mut try_statements = Vec::new();
+            parse_code_block(&mut &content, &mut try_statements)?;
+
+            let mut catches = Vec::new();
+            let mut catch_all = None;
+
+            let mut go = true;
+            while go {
+                let content_la = content.fork();
+                if let Ok(potential_catch) = content_la.parse::<Ident>() {
+                    let pc_str = potential_catch.to_string();
+                    match pc_str.as_str() {
+                        "catch" => {
+                            let mut catch_statements = Vec::new();
+
+                            let _: Ident = content.parse()?;
+
+                            let catch_params;
+                            parenthesized!(catch_params in content);
+
+                            let error_type: Ident = catch_params.parse()?;
+
+                            let mut params: Vec<Parameter> = Vec::new();
+                            if catch_params.peek(Token![,]) {
+                                let _: Token![,] = catch_params.parse()?;
+
+                                let punctuated =
+                                    catch_params.parse_terminated(parse_param, Token![,])?;
+
+                                for param in punctuated.into_iter() {
+                                    params.push(param);
+                                }
+                            }
+
+                            parse_code_block(&mut &content, &mut catch_statements)?;
+
+                            catches.push((error_type, params, catch_statements));
+                        }
+                        "catch_all" => {
+                            let _: Ident = content.parse()?;
+                            let mut catch_statements = Vec::new();
+
+                            parse_code_block(&mut &content, &mut catch_statements)?;
+
+                            catch_all = Some(catch_statements);
+                        }
+                        _ => go = false,
+                    }
+                } else {
+                    go = false;
+                }
+            }
+
+            if !catches.is_empty() || catch_all.is_some() {
+                let elem = BodyElement::TryCatch {
+                    r#try: try_statements,
+                    catches,
+                    catch_all,
+                };
+                body.push(elem);
+            } else {
+                return Err(syn::Error::new_spanned(
+                    try_token,
+                    "try requires catch or catch_all",
+                ));
+            }
+        } else if content.peek(Token![if]) {
+            parse_if(&mut &content, body)?;
+        } else if content.peek(Token![while]) {
+            parse_while(&mut &content, body)?;
+        // } else if content.peek(Token![for]) {
+        //     todo!();
+        } else {
+            let stmt: Stmt = content.parse()?;
+            body.push(BodyElement::Statement(stmt));
+        }
+    }
+    // body = content.call(syn::Block::parse_within)?;
+
+    Ok(())
+}
+
+fn parse_if(input: &mut ParseStream, body: &mut Vec<BodyElement>) -> Result<()> {
+    let _: Token![if] = input.parse()?;
+
+    let condition: Expr = Expr::parse_without_eager_brace(input)?;
+
+    let mut if_body = Vec::new();
+    parse_code_block(input, &mut if_body)?;
+
+    let else_body = if input.peek(Token![else]) {
+        let _: Token![else] = input.parse()?;
+
+        let mut else_statements = Vec::new();
+        if input.peek(Token![if]) {
+            parse_if(input, &mut else_statements)?;
+        } else {
+            parse_code_block(input, &mut else_statements)?;
+        }
+        Some(else_statements)
+    } else {
+        None
+    };
+
+    body.push(BodyElement::If {
+        condition,
+        body: if_body,
+        r#else: else_body,
+    });
+
+    Ok(())
+}
+
+fn parse_while(input: &mut ParseStream, body: &mut Vec<BodyElement>) -> Result<()> {
+    let _: Token![while] = input.parse()?;
+
+    let condition: Expr = Expr::parse_without_eager_brace(input)?;
+
+    let mut while_body = Vec::new();
+    parse_code_block(input, &mut while_body)?;
+
+    body.push(BodyElement::While {
+        condition,
+        body: while_body,
+    });
+
+    Ok(())
 }
 
 fn translate_unary(
@@ -737,7 +804,46 @@ fn translate_unary(
                 "Dereferencing is not supported",
             ))
         }
-        syn::UnOp::Not(_) => todo!(),
+        syn::UnOp::Not(_) => {
+            translate_expression(
+                module,
+                function,
+                current_block,
+                expr_unary.expr.deref(),
+                None,
+                None,
+            )?;
+
+            // let's default to i32 for now
+            // TODO: revisit this, maybe it should only default for int literals?
+            let ty = match ty {
+                Some(ty) => ty,
+                None => &WasmType::I32,
+            };
+
+            let mut instructions = match ty {
+                // There is no neg instruction for integer types, so for integer types we multiply
+                // by -1
+                WasmType::I32 => vec![WatInstruction::I32Const(-1), WatInstruction::I32Mul],
+                WasmType::I64 => vec![WatInstruction::I64Const(-1), WatInstruction::I64Mul],
+                WasmType::F32 => vec![WatInstruction::F32Neg],
+                WasmType::F64 => vec![WatInstruction::F64Neg],
+                WasmType::I8 => vec![WatInstruction::i32_const(-1), WatInstruction::I32Mul],
+                WasmType::I31Ref => vec![
+                    WatInstruction::I31GetS,
+                    WatInstruction::i32_const(-1),
+                    WatInstruction::I32Mul,
+                    WatInstruction::RefI31,
+                ],
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        expr_unary,
+                        format!("not can be used only for numerical types at the moment"),
+                    ));
+                }
+            };
+            current_block.append(&mut instructions);
+        }
         syn::UnOp::Neg(_) => {
             translate_expression(
                 module,
@@ -763,10 +869,16 @@ fn translate_unary(
                 WasmType::F32 => vec![WatInstruction::F32Neg],
                 WasmType::F64 => vec![WatInstruction::F64Neg],
                 WasmType::I8 => vec![WatInstruction::i32_const(-1), WatInstruction::I32Mul],
+                WasmType::I31Ref => vec![
+                    WatInstruction::I31GetS,
+                    WatInstruction::i32_const(-1),
+                    WatInstruction::I32Mul,
+                    WatInstruction::RefI31,
+                ],
                 _ => {
                     return Err(syn::Error::new_spanned(
                         expr_unary,
-                        "negation can be used only for numeric types",
+                        format!("negation can be used only for numeric types, tried on {ty}"),
                     ));
                 }
             };
@@ -799,8 +911,18 @@ fn translate_binary(
             WasmType::broader_numeric_type(l, r)
         }
         (Some(l), Some(r)) if l == r => l.clone(),
-        (None, None) => panic!("Types must be known for a binary operation"),
-        (l, r) => panic!("Types need to match for a binary operation. Left: {l:?}, Right: {r:?}"),
+        (None, None) => {
+            return Err(syn::Error::new_spanned(
+                binary,
+                "Types need to be known for binary operation",
+            ))
+        }
+        (l, r) => {
+            return Err(syn::Error::new_spanned(
+                binary,
+                format!("Types need to match for a binary operation. Left: {l:?}, Right: {r:?}"),
+            ))
+        }
     };
 
     // if the negotiated type is I31Ref or I8, we have to convert it to I32 anyway
@@ -917,8 +1039,36 @@ fn translate_binary(
 
             current_block.push(instruction);
         }
-        syn::BinOp::And(_) => todo!("translate_binary: syn::BinOp::And(_) "),
-        syn::BinOp::Or(_) => todo!("translate_binary: syn::BinOp::Or(_) "),
+        syn::BinOp::And(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32And,
+                WasmType::I64 => WatInstruction::I64And,
+                WasmType::I8 => WatInstruction::I32And,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "|| can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
+        syn::BinOp::Or(op) => {
+            let instruction = match ty {
+                WasmType::I32 => WatInstruction::I32Or,
+                WasmType::I64 => WatInstruction::I64Or,
+                WasmType::I8 => WatInstruction::I32Or,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        op,
+                        "|| can only be performed on integers",
+                    ));
+                }
+            };
+
+            current_block.push(instruction);
+        }
         syn::BinOp::BitXor(op) => {
             let instruction = match ty {
                 WasmType::I32 => WatInstruction::I32Xor,
@@ -1153,203 +1303,216 @@ fn get_type(
     function: &WatFunction,
     instructions: &[WatInstruction],
 ) -> Option<WasmType> {
-    instructions
-        .last()
-        .map(|instr| match instr {
-            WatInstruction::Nop => todo!("WatInstruction::Local: WatInstruction::Nop "),
-            WatInstruction::Local { .. } => {
-                todo!("WatInstruction::Local: WatInstruction::Local ")
-            }
-            WatInstruction::GlobalGet(name) => Some(
-                module
-                    .globals
-                    .get(name)
-                    .ok_or(anyhow!("Could not find local {name}"))
-                    .unwrap()
-                    .clone()
-                    .ty,
-            ),
-            WatInstruction::GlobalSet(name) => None,
-            // TODO: Handle non existent local
-            WatInstruction::LocalGet(name) => Some(
-                function
-                    .locals
-                    .get(name)
-                    .or(function.params.iter().find(|p| &p.0 == name).map(|p| &p.1))
-                    .ok_or(anyhow!("Could not find local {name}"))
-                    .unwrap()
-                    .clone(),
-            ),
-            WatInstruction::LocalSet(_) => todo!("get_type: WatInstruction::LocalSet(_)"),
-            WatInstruction::Call(_) => todo!("get_type: WatInstruction::Call(_) "),
-            WatInstruction::CallRef(_) => todo!("get_type: WatInstruction::CallRef(_) "),
+    instructions.last().and_then(|instr| match instr {
+        WatInstruction::Nop => todo!("WatInstruction::Local: WatInstruction::Nop "),
+        WatInstruction::Local { .. } => {
+            todo!("WatInstruction::Local: WatInstruction::Local ")
+        }
+        WatInstruction::GlobalGet(name) => Some(
+            module
+                .globals
+                .get(name)
+                .ok_or(anyhow!("Could not find local {name}"))
+                .unwrap()
+                .clone()
+                .ty,
+        ),
+        WatInstruction::GlobalSet(_name) => None,
+        // TODO: Handle non existent local
+        WatInstruction::LocalGet(name) => Some(
+            function
+                .locals
+                .get(name)
+                .or(function.params.iter().find(|p| &p.0 == name).map(|p| &p.1))
+                .ok_or(anyhow!("Could not find local {name}"))
+                .unwrap()
+                .clone(),
+        ),
+        WatInstruction::LocalSet(_) => todo!("get_type: WatInstruction::LocalSet(_)"),
+        WatInstruction::Call(name) => module
+            .get_function(name)
+            .and_then(|f| f.results.first())
+            .cloned(),
+        WatInstruction::CallRef(_) => todo!("get_type: WatInstruction::CallRef(_) "),
 
-            WatInstruction::I32Const(_) => Some(WasmType::I32),
-            WatInstruction::I64Const(_) => Some(WasmType::I64),
-            WatInstruction::F32Const(_) => Some(WasmType::F32),
-            WatInstruction::F64Const(_) => Some(WasmType::F64),
+        WatInstruction::I32Const(_) => Some(WasmType::I32),
+        WatInstruction::I64Const(_) => Some(WasmType::I64),
+        WatInstruction::F32Const(_) => Some(WasmType::F32),
+        WatInstruction::F64Const(_) => Some(WasmType::F64),
 
-            WatInstruction::I32Eqz => Some(WasmType::I32),
-            WatInstruction::I64Eqz => Some(WasmType::I64),
-            WatInstruction::F32Eqz => Some(WasmType::F32),
-            WatInstruction::F64Eqz => Some(WasmType::F64),
+        WatInstruction::I32Eqz => Some(WasmType::I32),
+        WatInstruction::I64Eqz => Some(WasmType::I64),
+        WatInstruction::F32Eqz => Some(WasmType::F32),
+        WatInstruction::F64Eqz => Some(WasmType::F64),
 
-            WatInstruction::StructNew(_) => todo!("get_type: WatInstruction::StructNew(_) "),
-            WatInstruction::StructGet(_, _) => todo!("get_type: WatInstruction::StructGet(_) "),
-            WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
-            WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
-            WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
-            WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
-            WatInstruction::RefFunc(_) => todo!("get_type: WatInstruction::RefFunc(_) "),
-            WatInstruction::Type(_) => todo!("get_type: WatInstruction::Type(_) "),
-            WatInstruction::Return => todo!("get_type: WatInstruction::Return "),
-            WatInstruction::ReturnCall(_) => todo!("get_type: WatInstruction::ReturnCall(_) "),
-            WatInstruction::Block { .. } => todo!("get_type: WatInstruction::Block "),
-            WatInstruction::Loop { .. } => todo!("get_type: WatInstruction::Loop "),
-            WatInstruction::If { .. } => todo!("get_type: WatInstruction::If "),
-            WatInstruction::BrIf(_) => todo!("get_type: WatInstruction::BrIf(_) "),
-            WatInstruction::Br(_) => todo!("get_type: WatInstruction::Br(_) "),
-            WatInstruction::Empty => todo!("get_type: WatInstruction::Empty "),
-            WatInstruction::Log => todo!("get_type: WatInstruction::Log "),
-            WatInstruction::Identifier(_) => todo!("get_type: WatInstruction::Identifier(_) "),
-            WatInstruction::Drop => todo!("get_type: WatInstruction::Drop "),
-            WatInstruction::LocalTee(_) => todo!("get_type: WatInstruction::LocalTee(_) "),
-            WatInstruction::RefI31 => Some(WasmType::I31Ref),
-            WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
-            WatInstruction::Try { .. } => todo!("get_type: WatInstruction::Try "),
-            WatInstruction::Catch(_, _) => todo!("get_type: WatInstruction::Catch(_, "),
-            WatInstruction::CatchAll(_) => todo!("get_type: WatInstruction::CatchAll(_) "),
-            WatInstruction::I32Add => Some(WasmType::I32),
-            WatInstruction::I64Add => Some(WasmType::I64),
-            WatInstruction::F32Add => Some(WasmType::F32),
-            WatInstruction::F64Add => Some(WasmType::F64),
-            WatInstruction::I32GeS => Some(WasmType::I32),
-            WatInstruction::ArrayLen => Some(WasmType::I32),
-            WatInstruction::ArrayGet(name) => {
-                Some(get_element_type(module, function, name).ok()).flatten()
+        WatInstruction::StructNew(_) => todo!("get_type: WatInstruction::StructNew(_) "),
+        WatInstruction::StructGet(name, field_name) => {
+            if let Some(WasmType::Struct(fields)) = module.get_type_by_name(name) {
+                fields
+                    .iter()
+                    .find(|f| {
+                        f.name
+                            .as_ref()
+                            .is_some_and(|f_name| format!("${f_name}") == *field_name)
+                    })
+                    .map(|f| f.ty.clone())
+            } else {
+                None
             }
-            WatInstruction::ArrayGetU(_) => Some(WasmType::I32),
-            WatInstruction::ArraySet(name) => {
-                Some(get_element_type(module, function, name).ok()).flatten()
-            }
-            WatInstruction::ArrayNewFixed(_, _) => {
-                todo!("get_type: WatInstruction::NewFixed")
-            }
-            WatInstruction::I32Eq => Some(WasmType::I32),
-            WatInstruction::I64Eq => Some(WasmType::I32),
-            WatInstruction::F32Eq => Some(WasmType::I32),
-            WatInstruction::F64Eq => Some(WasmType::I32),
-            WatInstruction::I64ExtendI32S => Some(WasmType::I64),
-            WatInstruction::I32WrapI64 => Some(WasmType::I32),
-            WatInstruction::I31GetS => Some(WasmType::I32),
-            WatInstruction::F64PromoteF32 => Some(WasmType::F64),
-            WatInstruction::F32DemoteF64 => Some(WasmType::F32),
-            WatInstruction::I32Sub => Some(WasmType::I32),
-            WatInstruction::I64Sub => Some(WasmType::I64),
-            WatInstruction::F32Sub => Some(WasmType::F32),
-            WatInstruction::F64Sub => Some(WasmType::F64),
-            WatInstruction::I32Mul => Some(WasmType::I32),
-            WatInstruction::I64Mul => Some(WasmType::I64),
-            WatInstruction::F32Mul => Some(WasmType::F32),
-            WatInstruction::F64Mul => Some(WasmType::F64),
-            WatInstruction::I32DivS => Some(WasmType::I32),
-            WatInstruction::I64DivS => Some(WasmType::I64),
-            WatInstruction::I32DivU => Some(WasmType::I32),
-            WatInstruction::I64DivU => Some(WasmType::I64),
-            WatInstruction::F32Div => Some(WasmType::F32),
-            WatInstruction::F64Div => Some(WasmType::F64),
-            WatInstruction::I32RemS => Some(WasmType::I32),
-            WatInstruction::I64RemS => Some(WasmType::I64),
-            WatInstruction::I32RemU => Some(WasmType::I32),
-            WatInstruction::I64RemU => Some(WasmType::I64),
-            WatInstruction::I32Ne => Some(WasmType::I32),
-            WatInstruction::I64Ne => Some(WasmType::I64),
-            WatInstruction::F32Ne => Some(WasmType::F32),
-            WatInstruction::F64Ne => Some(WasmType::F64),
-            WatInstruction::I32And => Some(WasmType::I32),
-            WatInstruction::I64And => Some(WasmType::I64),
-            WatInstruction::I32Or => Some(WasmType::I32),
-            WatInstruction::I64Or => Some(WasmType::I64),
-            WatInstruction::I32Xor => Some(WasmType::I32),
-            WatInstruction::I64Xor => Some(WasmType::I64),
-            WatInstruction::I32LtS => Some(WasmType::I32),
-            WatInstruction::I64LtS => Some(WasmType::I64),
-            WatInstruction::I32LtU => Some(WasmType::I32),
-            WatInstruction::I64LtU => Some(WasmType::I64),
-            WatInstruction::F32Lt => Some(WasmType::F32),
-            WatInstruction::F64Lt => Some(WasmType::F64),
-            WatInstruction::I32LeS => Some(WasmType::I32),
-            WatInstruction::I64LeS => Some(WasmType::I64),
-            WatInstruction::I32LeU => Some(WasmType::I32),
-            WatInstruction::I64LeU => Some(WasmType::I64),
-            WatInstruction::F32Le => Some(WasmType::F32),
-            WatInstruction::F64Le => Some(WasmType::F64),
-            WatInstruction::I64GeS => Some(WasmType::I64),
-            WatInstruction::I32GeU => Some(WasmType::I32),
-            WatInstruction::I64GeU => Some(WasmType::I64),
-            WatInstruction::F32Ge => Some(WasmType::F32),
-            WatInstruction::F64Ge => Some(WasmType::F64),
-            WatInstruction::I32GtS => Some(WasmType::I32),
-            WatInstruction::I64GtS => Some(WasmType::I64),
-            WatInstruction::I32GtU => Some(WasmType::I32),
-            WatInstruction::I64GtU => Some(WasmType::I64),
-            WatInstruction::F32Gt => Some(WasmType::F32),
-            WatInstruction::F64Gt => Some(WasmType::F64),
-            WatInstruction::I32ShlS => Some(WasmType::I32),
-            WatInstruction::I64ShlS => Some(WasmType::I64),
-            WatInstruction::I32ShlU => Some(WasmType::I32),
-            WatInstruction::I64ShlU => Some(WasmType::I64),
-            WatInstruction::I32ShrS => Some(WasmType::I32),
-            WatInstruction::I64ShrS => Some(WasmType::I64),
-            WatInstruction::I32ShrU => Some(WasmType::I32),
-            WatInstruction::I64ShrU => Some(WasmType::I64),
-            WatInstruction::F32Neg => Some(WasmType::F32),
-            WatInstruction::F64Neg => Some(WasmType::F64),
-            WatInstruction::I32Store(_) => None,
-            WatInstruction::I64Store(_) => None,
-            WatInstruction::F32Store(_) => None,
-            WatInstruction::F64Store(_) => None,
-            WatInstruction::I32Store8(_) => None,
-            WatInstruction::I32Store16(_) => None,
-            WatInstruction::I64Store8(_) => None,
-            WatInstruction::I64Store16(_) => None,
-            WatInstruction::I64Store32(_) => None,
-            WatInstruction::I32Load(_) => Some(WasmType::I32),
-            WatInstruction::I64Load(_) => Some(WasmType::I64),
-            WatInstruction::F32Load(_) => Some(WasmType::F32),
-            WatInstruction::F64Load(_) => Some(WasmType::F64),
-            WatInstruction::I32Load8S(_) => Some(WasmType::I32),
-            WatInstruction::I32Load8U(_) => Some(WasmType::I32),
-            WatInstruction::I32Load16S(_) => Some(WasmType::I32),
-            WatInstruction::I32Load16U(_) => Some(WasmType::I32),
-            WatInstruction::I64Load8S(_) => Some(WasmType::I64),
-            WatInstruction::I64Load8U(_) => Some(WasmType::I64),
-            WatInstruction::I64Load16S(_) => Some(WasmType::I64),
-            WatInstruction::I64Load16U(_) => Some(WasmType::I64),
-            WatInstruction::I64Load32S(_) => Some(WasmType::I64),
-            WatInstruction::I64Load32U(_) => Some(WasmType::I64),
-            WatInstruction::F32ConvertI32S => Some(WasmType::F32),
-            WatInstruction::F32ConvertI32U => Some(WasmType::F32),
-            WatInstruction::F32ConvertI64S => Some(WasmType::F32),
-            WatInstruction::F32ConvertI64U => Some(WasmType::F32),
-            WatInstruction::F64ConvertI32S => Some(WasmType::F64),
-            WatInstruction::F64ConvertI32U => Some(WasmType::F64),
-            WatInstruction::F64ConvertI64S => Some(WasmType::F64),
-            WatInstruction::F64ConvertI64U => Some(WasmType::F64),
-            WatInstruction::I32TruncF32S => Some(WasmType::I32),
-            WatInstruction::I32TruncF32U => Some(WasmType::I32),
-            WatInstruction::I32TruncF64S => Some(WasmType::I32),
-            WatInstruction::I32TruncF64U => Some(WasmType::I32),
-            WatInstruction::I64TruncF32S => Some(WasmType::I64),
-            WatInstruction::I64TruncF32U => Some(WasmType::I64),
-            WatInstruction::I64TruncF64S => Some(WasmType::I64),
-            WatInstruction::I64TruncF64U => Some(WasmType::I64),
-            WatInstruction::I32GetS => Some(WasmType::I32),
-            WatInstruction::I32GetU => Some(WasmType::I32),
-            WatInstruction::RefCast(ty) => Some(ty.clone()),
-            WatInstruction::RefTest(_) => Some(WasmType::I32),
-        })
-        .flatten()
+        }
+        WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
+        WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
+        WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
+        WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
+        WatInstruction::RefFunc(_) => todo!("get_type: WatInstruction::RefFunc(_) "),
+        WatInstruction::Type(_) => todo!("get_type: WatInstruction::Type(_) "),
+        WatInstruction::Return => todo!("get_type: WatInstruction::Return "),
+        WatInstruction::ReturnCall(_) => todo!("get_type: WatInstruction::ReturnCall(_) "),
+        WatInstruction::Block { .. } => todo!("get_type: WatInstruction::Block "),
+        WatInstruction::Loop { .. } => todo!("get_type: WatInstruction::Loop "),
+        WatInstruction::If { .. } => todo!("get_type: WatInstruction::If "),
+        WatInstruction::BrIf(_) => todo!("get_type: WatInstruction::BrIf(_) "),
+        WatInstruction::Br(_) => todo!("get_type: WatInstruction::Br(_) "),
+        WatInstruction::Empty => todo!("get_type: WatInstruction::Empty "),
+        WatInstruction::Log => todo!("get_type: WatInstruction::Log "),
+        WatInstruction::Identifier(_) => todo!("get_type: WatInstruction::Identifier(_) "),
+        WatInstruction::Drop => todo!("get_type: WatInstruction::Drop "),
+        WatInstruction::LocalTee(_) => todo!("get_type: WatInstruction::LocalTee(_) "),
+        WatInstruction::RefI31 => Some(WasmType::I31Ref),
+        WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
+        WatInstruction::Try { .. } => todo!("get_type: WatInstruction::Try "),
+        WatInstruction::Catch(_, _) => todo!("get_type: WatInstruction::Catch(_, "),
+        WatInstruction::CatchAll(_) => todo!("get_type: WatInstruction::CatchAll(_) "),
+        WatInstruction::I32Add => Some(WasmType::I32),
+        WatInstruction::I64Add => Some(WasmType::I64),
+        WatInstruction::F32Add => Some(WasmType::F32),
+        WatInstruction::F64Add => Some(WasmType::F64),
+        WatInstruction::I32GeS => Some(WasmType::I32),
+        WatInstruction::ArrayLen => Some(WasmType::I32),
+        WatInstruction::ArrayGet(name) => {
+            Some(get_element_type(module, function, name).ok()).flatten()
+        }
+        WatInstruction::ArrayGetU(_) => Some(WasmType::I32),
+        WatInstruction::ArraySet(name) => {
+            Some(get_element_type(module, function, name).ok()).flatten()
+        }
+        WatInstruction::ArrayNewFixed(_, _) => {
+            todo!("get_type: WatInstruction::NewFixed")
+        }
+        WatInstruction::I32Eq => Some(WasmType::I32),
+        WatInstruction::I64Eq => Some(WasmType::I32),
+        WatInstruction::F32Eq => Some(WasmType::I32),
+        WatInstruction::F64Eq => Some(WasmType::I32),
+        WatInstruction::I64ExtendI32S => Some(WasmType::I64),
+        WatInstruction::I32WrapI64 => Some(WasmType::I32),
+        WatInstruction::I31GetS => Some(WasmType::I32),
+        WatInstruction::F64PromoteF32 => Some(WasmType::F64),
+        WatInstruction::F32DemoteF64 => Some(WasmType::F32),
+        WatInstruction::I32Sub => Some(WasmType::I32),
+        WatInstruction::I64Sub => Some(WasmType::I64),
+        WatInstruction::F32Sub => Some(WasmType::F32),
+        WatInstruction::F64Sub => Some(WasmType::F64),
+        WatInstruction::I32Mul => Some(WasmType::I32),
+        WatInstruction::I64Mul => Some(WasmType::I64),
+        WatInstruction::F32Mul => Some(WasmType::F32),
+        WatInstruction::F64Mul => Some(WasmType::F64),
+        WatInstruction::I32DivS => Some(WasmType::I32),
+        WatInstruction::I64DivS => Some(WasmType::I64),
+        WatInstruction::I32DivU => Some(WasmType::I32),
+        WatInstruction::I64DivU => Some(WasmType::I64),
+        WatInstruction::F32Div => Some(WasmType::F32),
+        WatInstruction::F64Div => Some(WasmType::F64),
+        WatInstruction::I32RemS => Some(WasmType::I32),
+        WatInstruction::I64RemS => Some(WasmType::I64),
+        WatInstruction::I32RemU => Some(WasmType::I32),
+        WatInstruction::I64RemU => Some(WasmType::I64),
+        WatInstruction::I32Ne => Some(WasmType::I32),
+        WatInstruction::I64Ne => Some(WasmType::I64),
+        WatInstruction::F32Ne => Some(WasmType::F32),
+        WatInstruction::F64Ne => Some(WasmType::F64),
+        WatInstruction::I32And => Some(WasmType::I32),
+        WatInstruction::I64And => Some(WasmType::I64),
+        WatInstruction::I32Or => Some(WasmType::I32),
+        WatInstruction::I64Or => Some(WasmType::I64),
+        WatInstruction::I32Xor => Some(WasmType::I32),
+        WatInstruction::I64Xor => Some(WasmType::I64),
+        WatInstruction::I32LtS => Some(WasmType::I32),
+        WatInstruction::I64LtS => Some(WasmType::I64),
+        WatInstruction::I32LtU => Some(WasmType::I32),
+        WatInstruction::I64LtU => Some(WasmType::I64),
+        WatInstruction::F32Lt => Some(WasmType::F32),
+        WatInstruction::F64Lt => Some(WasmType::F64),
+        WatInstruction::I32LeS => Some(WasmType::I32),
+        WatInstruction::I64LeS => Some(WasmType::I64),
+        WatInstruction::I32LeU => Some(WasmType::I32),
+        WatInstruction::I64LeU => Some(WasmType::I64),
+        WatInstruction::F32Le => Some(WasmType::F32),
+        WatInstruction::F64Le => Some(WasmType::F64),
+        WatInstruction::I64GeS => Some(WasmType::I64),
+        WatInstruction::I32GeU => Some(WasmType::I32),
+        WatInstruction::I64GeU => Some(WasmType::I64),
+        WatInstruction::F32Ge => Some(WasmType::F32),
+        WatInstruction::F64Ge => Some(WasmType::F64),
+        WatInstruction::I32GtS => Some(WasmType::I32),
+        WatInstruction::I64GtS => Some(WasmType::I64),
+        WatInstruction::I32GtU => Some(WasmType::I32),
+        WatInstruction::I64GtU => Some(WasmType::I64),
+        WatInstruction::F32Gt => Some(WasmType::F32),
+        WatInstruction::F64Gt => Some(WasmType::F64),
+        WatInstruction::I32ShlS => Some(WasmType::I32),
+        WatInstruction::I64ShlS => Some(WasmType::I64),
+        WatInstruction::I32ShlU => Some(WasmType::I32),
+        WatInstruction::I64ShlU => Some(WasmType::I64),
+        WatInstruction::I32ShrS => Some(WasmType::I32),
+        WatInstruction::I64ShrS => Some(WasmType::I64),
+        WatInstruction::I32ShrU => Some(WasmType::I32),
+        WatInstruction::I64ShrU => Some(WasmType::I64),
+        WatInstruction::F32Neg => Some(WasmType::F32),
+        WatInstruction::F64Neg => Some(WasmType::F64),
+        WatInstruction::I32Store(_) => None,
+        WatInstruction::I64Store(_) => None,
+        WatInstruction::F32Store(_) => None,
+        WatInstruction::F64Store(_) => None,
+        WatInstruction::I32Store8(_) => None,
+        WatInstruction::I32Store16(_) => None,
+        WatInstruction::I64Store8(_) => None,
+        WatInstruction::I64Store16(_) => None,
+        WatInstruction::I64Store32(_) => None,
+        WatInstruction::I32Load(_) => Some(WasmType::I32),
+        WatInstruction::I64Load(_) => Some(WasmType::I64),
+        WatInstruction::F32Load(_) => Some(WasmType::F32),
+        WatInstruction::F64Load(_) => Some(WasmType::F64),
+        WatInstruction::I32Load8S(_) => Some(WasmType::I32),
+        WatInstruction::I32Load8U(_) => Some(WasmType::I32),
+        WatInstruction::I32Load16S(_) => Some(WasmType::I32),
+        WatInstruction::I32Load16U(_) => Some(WasmType::I32),
+        WatInstruction::I64Load8S(_) => Some(WasmType::I64),
+        WatInstruction::I64Load8U(_) => Some(WasmType::I64),
+        WatInstruction::I64Load16S(_) => Some(WasmType::I64),
+        WatInstruction::I64Load16U(_) => Some(WasmType::I64),
+        WatInstruction::I64Load32S(_) => Some(WasmType::I64),
+        WatInstruction::I64Load32U(_) => Some(WasmType::I64),
+        WatInstruction::F32ConvertI32S => Some(WasmType::F32),
+        WatInstruction::F32ConvertI32U => Some(WasmType::F32),
+        WatInstruction::F32ConvertI64S => Some(WasmType::F32),
+        WatInstruction::F32ConvertI64U => Some(WasmType::F32),
+        WatInstruction::F64ConvertI32S => Some(WasmType::F64),
+        WatInstruction::F64ConvertI32U => Some(WasmType::F64),
+        WatInstruction::F64ConvertI64S => Some(WasmType::F64),
+        WatInstruction::F64ConvertI64U => Some(WasmType::F64),
+        WatInstruction::I32TruncF32S => Some(WasmType::I32),
+        WatInstruction::I32TruncF32U => Some(WasmType::I32),
+        WatInstruction::I32TruncF64S => Some(WasmType::I32),
+        WatInstruction::I32TruncF64U => Some(WasmType::I32),
+        WatInstruction::I64TruncF32S => Some(WasmType::I64),
+        WatInstruction::I64TruncF32U => Some(WasmType::I64),
+        WatInstruction::I64TruncF64S => Some(WasmType::I64),
+        WatInstruction::I64TruncF64U => Some(WasmType::I64),
+        WatInstruction::I32GetS => Some(WasmType::I32),
+        WatInstruction::I32GetU => Some(WasmType::I32),
+        WatInstruction::RefCast(ty) => Some(ty.clone()),
+        WatInstruction::RefTest(_) => Some(WasmType::I32),
+    })
 }
 
 fn extract_name_from_pattern(pattern: &Pat) -> String {
@@ -1376,13 +1539,11 @@ fn extract_name_from_pattern(pattern: &Pat) -> String {
 }
 
 fn get_struct_type(
-    _module: &WatModule,
+    module: &WatModule,
     function: &WatFunction,
     name: &str,
 ) -> anyhow::Result<String> {
-    let ty = function
-        .locals
-        .get(name)
+    let ty = get_type_for_a_label(module, function, name)
         .ok_or(anyhow!("Couldn't find a struct with name {name}"))?;
 
     match ty {
@@ -1468,6 +1629,40 @@ fn get_element_type(
         WasmType::Array { ty, .. } => Ok(*ty.clone()),
         _ => anyhow::bail!("Tried to use type {name} as an array type"),
     }
+}
+
+fn translate_while_loop(
+    module: &mut WatModule,
+    function: &mut WatFunction,
+    block: &mut InstructionsList,
+    condition: &Expr,
+    body: &Vec<BodyElement>,
+) -> Result<()> {
+    let mut instructions = Vec::new();
+    translate_expression(
+        module,
+        function,
+        &mut instructions,
+        condition,
+        None,
+        Some(&WasmType::I32),
+    )?;
+
+    instructions.push(WatInstruction::br_if("$block-label"));
+
+    for stmt in body {
+        translate_body_element(module, function, &mut instructions, stmt)?;
+    }
+
+    instructions.push(WatInstruction::br("$loop-label"));
+
+    // TODO: unique loop labels
+    let loop_instr = WatInstruction::r#loop("$loop-label", instructions);
+    let block_instr = WatInstruction::block("$block-label", Signature::default(), vec![loop_instr]);
+
+    block.push(block_instr);
+
+    Ok(())
 }
 
 fn translate_for_loop(
@@ -1585,11 +1780,24 @@ fn translate_lit(
                 WasmType::F32 => vec![WatInstruction::F32Const(lit_int.base10_parse().unwrap())],
                 WasmType::F64 => vec![WatInstruction::F64Const(lit_int.base10_parse().unwrap())],
                 WasmType::I8 => vec![WatInstruction::I32Const(lit_int.base10_parse().unwrap())],
-                WasmType::I31Ref => todo!("i31ref literal"),
+                WasmType::I31Ref => {
+                    vec![
+                        WatInstruction::I32Const(lit_int.base10_parse().unwrap()),
+                        WatInstruction::RefI31,
+                    ]
+                }
                 t => todo!("translate int lteral: {t:?}"),
             }
         }
-        syn::Lit::Float(_) => todo!("translate_lit: syn::Lit::Float(_) "),
+        syn::Lit::Float(lit_float) => {
+            // default to i32 if the type is not known
+            let ty = ty.unwrap_or(&WasmType::F32);
+            match ty {
+                WasmType::F32 => vec![WatInstruction::F32Const(lit_float.base10_parse().unwrap())],
+                WasmType::F64 => vec![WatInstruction::F64Const(lit_float.base10_parse().unwrap())],
+                t => todo!("translate float lteral: {t:?}"),
+            }
+        }
         syn::Lit::Bool(_) => todo!("translate_lit: syn::Lit::Bool(_) "),
         syn::Lit::Verbatim(_) => todo!("translate_lit: syn::Lit::Verbatim(_) "),
         _ => todo!("translate_lit: _ "),
@@ -1748,7 +1956,10 @@ fn translate_expression(
                     length as u16,
                 ));
             } else {
-                panic!("Could not get the type for array literal, type we got: {ty:?}");
+                return Err(syn::Error::new_spanned(
+                    expr_array,
+                    format!("Could not get the type for array literal, type we got: {ty:?}"),
+                ));
             }
         }
         Expr::Assign(expr_assign) => {
@@ -1850,51 +2061,62 @@ fn translate_expression(
                     )?;
                     current_block.push(instr);
                 }
-                Expr::Field(expr_field) => match &*expr_field.base {
-                    Expr::Path(expr_path) => {
-                        let ident = &expr_path.path.segments[0].ident;
-                        let name = format!("${ident}");
-                        let type_name = get_struct_type(module, function, &name).unwrap();
-                        let (field_name, field_type) = match &expr_field.member {
-                            syn::Member::Named(ident) => {
-                                let field_type = get_struct_field_type_by_name(
-                                    module,
-                                    function,
-                                    current_block,
-                                    &type_name,
-                                    &ident.to_string(),
-                                )
-                                .unwrap();
-                                let field_name = format!("${ident}");
-                                (field_name, field_type)
-                            }
-                            syn::Member::Unnamed(index) => {
-                                let field_type = get_struct_field_type(
-                                    module,
-                                    function,
-                                    current_block,
-                                    &type_name,
-                                    index.index as usize,
-                                )
-                                .unwrap();
-                                let field_name = format!("${ident}");
-                                (field_name, field_type)
-                            }
-                        };
+                Expr::Field(expr_field) => {
+                    translate_expression(
+                        module,
+                        function,
+                        current_block,
+                        expr_field.base.as_ref(),
+                        None,
+                        ty,
+                    )?;
+                    let struct_type = get_type(module, function, current_block);
+                    let type_name = if let Some(WasmType::Ref(name, _)) = struct_type {
+                        name.clone()
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            expr_field,
+                            format!("Couldn't determine struct type, found {struct_type:?}"),
+                        ));
+                    };
 
-                        current_block.push(WatInstruction::local_get(&name));
-                        translate_expression(
-                            module,
-                            function,
-                            current_block,
-                            expr_assign.right.deref(),
-                            None,
-                            Some(&field_type),
-                        )?;
-                        current_block.push(WatInstruction::struct_set(&type_name, &field_name));
-                    }
-                    _ => panic!("Only path is possible to use with a field access"),
-                },
+                    let (field_name, field_type) = match &expr_field.member {
+                        syn::Member::Named(ident) => {
+                            let field_type = get_struct_field_type_by_name(
+                                module,
+                                function,
+                                current_block,
+                                &type_name,
+                                &ident.to_string(),
+                            )
+                            .unwrap();
+                            let field_name = format!("${ident}");
+                            (field_name, field_type)
+                        }
+                        syn::Member::Unnamed(index) => {
+                            let field_type = get_struct_field_type(
+                                module,
+                                function,
+                                current_block,
+                                &type_name,
+                                index.index as usize,
+                            )
+                            .unwrap();
+                            let field_name = format!("{}", index.index);
+                            (field_name, field_type)
+                        }
+                    };
+                    translate_expression(
+                        module,
+                        function,
+                        current_block,
+                        expr_assign.right.deref(),
+                        None,
+                        Some(&field_type),
+                    )?;
+
+                    current_block.push(WatInstruction::struct_set(&type_name, &field_name));
+                }
                 e => todo!("assign not implemented for {e:?}"),
             };
         }
@@ -1967,7 +2189,7 @@ fn translate_expression(
                 translate_statement(module, function, current_block, stmt)?;
             }
         }
-        Expr::Break(_) => todo!("translate_expression: Expr::Break(_) "),
+        Expr::Break(_) => current_block.push(WatInstruction::Br("1".to_string())),
         Expr::Call(expr_call) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = expr_call.func.deref() {
                 let func_name = path.segments[0].ident.to_string();
@@ -2015,59 +2237,114 @@ fn translate_expression(
                     } else {
                         panic!("Second argument of assert must be a string literal");
                     }
-                } else {
-                    // Regular function call
-                    for arg in &expr_call.args {
-                        translate_expression(module, function, current_block, arg, None, ty)?;
-                    }
-                    if let Some(label) = get_label_type(module, function, &func_name) {
-                        match label {
-                            LabelType::Global => {
-                                let ty = get_type_for_a_label(module, function, &func_name).ok_or(
-                                    syn::Error::new_spanned(
-                                        expr_call,
-                                        format!("Can't find reference {func_name}"),
-                                    ),
+                } else if let Some(label) = get_label_type(module, function, &func_name) {
+                    match label {
+                        LabelType::Global => {
+                            let ty = get_type_for_a_label(module, function, &func_name).ok_or(
+                                syn::Error::new_spanned(
+                                    expr_call,
+                                    format!("Can't find reference {func_name}"),
+                                ),
+                            )?;
+                            // TODO: most of this block of code is the same as for Local. refactor
+                            // it
+                            let func_type = if let WasmType::Ref(name, _) = ty {
+                                name
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    expr_call,
+                                    "Can't get function type",
+                                ));
+                            };
+
+                            let params = if let Some(WasmType::Func { name: _, signature }) =
+                                module.get_type_by_name(&func_type)
+                            {
+                                signature.params.clone()
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    expr_call,
+                                    format!("Couldn't find type for {func_type}"),
+                                ));
+                            };
+
+                            for (i, arg) in expr_call.args.iter().enumerate() {
+                                translate_expression(
+                                    module,
+                                    function,
+                                    current_block,
+                                    arg,
+                                    None,
+                                    params.get(i).map(|p| &p.1),
                                 )?;
-                                let func_type = if let WasmType::Ref(name, _) = ty {
-                                    name
-                                } else {
-                                    return Err(syn::Error::new_spanned(
-                                        expr_call,
-                                        "Can't get function type",
-                                    ));
-                                };
-                                current_block
-                                    .push(WatInstruction::global_get(format!("${}", func_name)));
-                                current_block.push(WatInstruction::call_ref(func_type));
                             }
-                            LabelType::Local => {
-                                let ty = get_type_for_a_label(module, function, &func_name).ok_or(
-                                    syn::Error::new_spanned(
-                                        expr_call,
-                                        format!("Can't find reference {func_name}"),
-                                    ),
-                                )?;
-                                let func_type = if let WasmType::Ref(name, _) = ty {
-                                    name
-                                } else {
-                                    return Err(syn::Error::new_spanned(
-                                        expr_call,
-                                        "Can't get function type",
-                                    ));
-                                };
-                                current_block
-                                    .push(WatInstruction::local_get(format!("${}", func_name)));
-                                current_block.push(WatInstruction::call_ref(func_type));
-                            }
-                            LabelType::Memory => todo!(),
-                            LabelType::Func => {
-                                current_block.push(WatInstruction::call(format!("${}", func_name)));
-                            }
+
+                            current_block
+                                .push(WatInstruction::global_get(format!("${}", func_name)));
+                            current_block.push(WatInstruction::call_ref(func_type));
                         }
-                    } else {
-                        current_block.push(WatInstruction::call(format!("${}", func_name)));
+                        LabelType::Local => {
+                            let ty = get_type_for_a_label(module, function, &func_name).ok_or(
+                                syn::Error::new_spanned(
+                                    expr_call,
+                                    format!("Can't find reference {func_name}"),
+                                ),
+                            )?;
+                            let func_type = if let WasmType::Ref(name, _) = ty {
+                                name
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    expr_call,
+                                    "Can't get function type",
+                                ));
+                            };
+
+                            let params = if let Some(WasmType::Func { name: _, signature }) =
+                                module.get_type_by_name(&func_type)
+                            {
+                                signature.params.clone()
+                            } else {
+                                return Err(syn::Error::new_spanned(
+                                    expr_call,
+                                    format!("Couldn't find type for {func_type}"),
+                                ));
+                            };
+
+                            for (i, arg) in expr_call.args.iter().enumerate() {
+                                translate_expression(
+                                    module,
+                                    function,
+                                    current_block,
+                                    arg,
+                                    None,
+                                    params.get(i).map(|p| &p.1),
+                                )?;
+                            }
+
+                            current_block
+                                .push(WatInstruction::local_get(format!("${}", func_name)));
+                            current_block.push(WatInstruction::call_ref(func_type));
+                        }
+                        LabelType::Memory => todo!("memory access in call"),
+                        LabelType::Func => {
+                            let params = module.get_function(&func_name).unwrap().params.clone();
+
+                            for (i, arg) in expr_call.args.iter().enumerate() {
+                                translate_expression(
+                                    module,
+                                    function,
+                                    current_block,
+                                    arg,
+                                    None,
+                                    params.get(i).map(|p| &p.1),
+                                )?;
+                            }
+                            current_block.push(WatInstruction::call(format!("${}", func_name)));
+                        }
                     }
+                } else {
+                    // panic!("Unknonwn function call {func_name}");
+                    current_block.push(WatInstruction::call(format!("${}", func_name)));
                 }
             } else {
                 panic!("Only calling functions by path is supported at the moment");
@@ -2177,7 +2454,7 @@ fn translate_expression(
                         }
                     },
                     WasmType::Anyref => match &target_type {
-                        WasmType::Ref(_, _) => {
+                        WasmType::Ref(_, _) | WasmType::I31Ref => {
                             current_block.push(WatInstruction::ref_cast(target_type));
                         }
                         t => {
@@ -2224,22 +2501,32 @@ fn translate_expression(
         }
         Expr::Closure(_) => todo!("translate_expression: Expr::Closure(_) "),
         Expr::Const(_) => todo!("translate_expression: Expr::Const(_) "),
-        Expr::Continue(_) => todo!("translate_expression: Expr::Continue(_) "),
-        Expr::Field(expr_field) => match &*expr_field.base {
-            Expr::Path(expr_path) => {
-                let ident = &expr_path.path.segments[0].ident;
-                let name = format!("${ident}");
-                let type_name = get_struct_type(module, function, &name).unwrap();
-                let field_name = match &expr_field.member {
-                    syn::Member::Named(ident) => format!("${ident}"),
-                    syn::Member::Unnamed(index) => index.index.to_string(),
-                };
+        Expr::Continue(_) => current_block.push(WatInstruction::Br("0".to_string())),
+        Expr::Field(expr_field) => {
+            translate_expression(
+                module,
+                function,
+                current_block,
+                expr_field.base.as_ref(),
+                None,
+                ty,
+            )?;
+            let struct_type = get_type(module, function, current_block);
+            let type_name = if let Some(WasmType::Ref(name, _)) = struct_type {
+                name.clone()
+            } else {
+                return Err(syn::Error::new_spanned(
+                    expr_field,
+                    format!("Couldn't determine struct type, found {struct_type:?}"),
+                ));
+            };
 
-                current_block.push(WatInstruction::local_get(&name));
-                current_block.push(WatInstruction::struct_get(&type_name, &field_name));
-            }
-            _ => panic!("Only path is possible to use with a field access"),
-        },
+            let field_name = match &expr_field.member {
+                syn::Member::Named(ident) => format!("${ident}"),
+                syn::Member::Unnamed(index) => index.index.to_string(),
+            };
+            current_block.push(WatInstruction::struct_get(&type_name, &field_name));
+        }
         Expr::ForLoop(for_loop_expr) => {
             translate_for_loop(module, function, current_block, for_loop_expr)?;
         }
@@ -2259,7 +2546,7 @@ fn translate_expression(
                 translate_statement(module, function, &mut then_instructions, stmt)?;
             }
 
-            let else_instructions = if_expr.else_branch.clone().map(|(_, expr)| {
+            let else_instructions = if let Some((_, expr)) = &if_expr.else_branch {
                 let mut else_instructions = Vec::new();
                 translate_expression(
                     module,
@@ -2268,10 +2555,11 @@ fn translate_expression(
                     expr.deref(),
                     None,
                     ty,
-                )
-                .unwrap();
-                else_instructions
-            });
+                )?;
+                Some(else_instructions)
+            } else {
+                None
+            };
 
             current_block.push(WatInstruction::r#if(then_instructions, else_instructions))
         }
@@ -2320,7 +2608,10 @@ fn translate_expression(
                         Some(WasmType::I32) => {
                             current_block.push(WatInstruction::I32Load(target_name.into()));
                         }
-                        Some(_) => todo!(),
+                        Some(WasmType::I8) => {
+                            current_block.push(WatInstruction::I32Load8S(target_name.into()));
+                        }
+                        Some(ty) => todo!("memory access other type {ty}"),
                         None => {
                             // default to i32
                             current_block.push(WatInstruction::I32Load(target_name.into()));
@@ -2351,7 +2642,17 @@ fn translate_expression(
         }
         Expr::Match(_) => todo!("translate_expression: Expr::Match(_) "),
         Expr::MethodCall(_) => todo!("translate_expression: Expr::MethodCall(_) "),
-        Expr::Paren(_) => todo!("translate_expression: Expr::Paren(_) "),
+        Expr::Paren(expr_paren) => {
+            // TODO: it kinda looks like this implementation is too simple, am I missing something?
+            translate_expression(
+                module,
+                function,
+                current_block,
+                expr_paren.expr.as_ref(),
+                None,
+                ty,
+            )?;
+        }
         Expr::Path(path_expr) => {
             let name = path_expr.path.segments[0].ident.to_string();
             if name == "null" {
@@ -2402,12 +2703,19 @@ fn translate_expression(
                 )?;
                 current_block.push(WatInstruction::array_new(typeidx.to_string()));
             } else {
-                panic!("Could not get the type for array literal, type we got: {ty:?}");
+                return Err(syn::Error::new_spanned(
+                    expr_repeat,
+                    format!("Could not get the type for array literal, type we got: {ty:?}"),
+                ));
             }
         }
         Expr::Return(ret) => {
             if let Some(expr) = &ret.expr {
-                translate_expression(module, function, current_block, expr, None, None)?;
+                let results = function.results.clone();
+                // This assumes we have only one result. For now it's fine as we don't support
+                // more, but it might change in the future
+                let result_type = results.first();
+                translate_expression(module, function, current_block, expr, None, result_type)?;
             }
             current_block.push(WatInstruction::Return);
         }
@@ -2696,7 +3004,7 @@ impl ToTokens for OurWatInstruction {
             }
             LocalTee(name) => quote! { #w::LocalTee(#name.to_string()) },
             RefI31 => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::RefI31(_) ")
+                quote! { #w::RefI31 }
             }
             Throw(label) => quote! { #w::Throw(#label.to_string()) },
             Try {
@@ -2916,7 +3224,7 @@ impl ToTokens for OurWatFunction {
 fn translate_type(ty: &Type) -> Option<WasmType> {
     match ty {
         syn::Type::Array(_) => {
-            todo!("Stmt::Local(local): syn::Type::Array(_) ")
+            todo!("Stmt::Local(local): syn::Type::Array(_) {ty:#?}")
         }
         syn::Type::BareFn(bare_fn) => Some(WasmType::Func {
             name: None,
@@ -3120,48 +3428,21 @@ fn translate_macro(
             }
         }
         "ref_test" => {
-            // There will be some hackery here. I don't really want to write my own parser,
-            // so I'm treating the tokens in between parens as a `let foo: Type` statement.
-            // I still expect it as two arguments, so first I'll convert `foo, Type` into a
-            // proper form
-            let a_let = vec![TokenTree::Ident(Ident::new("let", Span::call_site()))].into_iter();
-            let tokens = tokens.into_iter().map(|t| {
-                if t.to_string() == "," {
-                    TokenTree::Punct(Punct::new(':', Spacing::Alone))
-                } else {
-                    t
-                }
-            });
-            let semi = vec![TokenTree::Punct(Punct::new(';', Spacing::Alone))].into_iter();
-            let tokens = TokenStream2::from_iter(a_let.chain(tokens).chain(semi));
+            ::syn::parse::Parser::parse2(
+                |mut input: ParseStream<'_>| {
+                    let expr: Expr = input.parse()?;
 
-            let stmt: Stmt = ::syn::parse::Parser::parse2(Stmt::parse, tokens)?;
-            if let Stmt::Local(Local {
-                pat: syn::Pat::Type(pat_type),
-                ..
-            }) = stmt
-            {
-                let (name, ty) = translate_pat_type(function, &pat_type);
-                if let Some(ty) = ty {
-                    instructions.push(get_var_instruction(module, function, &name).ok_or(
-                        syn::Error::new_spanned(
-                            pat_type,
-                            format!("Coudln't find {name} local or global"),
-                        ),
-                    )?);
+                    let _: Token![,] = input.parse()?;
+
+                    let ty = parse_type(&mut input)?;
+
+                    translate_expression(module, function, instructions, &expr, None, None)?;
                     instructions.push(WatInstruction::ref_test(ty));
-                } else {
-                    return Err(syn::Error::new_spanned(
-                        pat_type,
-                        "Type has to be given as the second argument for ref_test! macro",
-                    ));
-                }
-            } else {
-                return Err(syn::Error::new(
-                            macro_span,
-                            "Invalid arguments for the ref_test! macro. The first argument has to be an identifier of a variable. The second argument must be a type"
-                        ));
-            }
+
+                    Ok(())
+                },
+                tokens.clone(),
+            )?;
         }
         _ => {
             return Err(syn::Error::new(
@@ -3271,7 +3552,7 @@ fn translate_body_element(
         } => {
             let mut try_instructions = Vec::new();
             for stmt in r#try {
-                translate_statement(module, function, &mut try_instructions, stmt)?;
+                translate_body_element(module, function, &mut try_instructions, stmt)?;
             }
 
             let mut wasm_catches = Vec::new();
@@ -3287,7 +3568,7 @@ fn translate_body_element(
                 }
 
                 for stmt in statements {
-                    translate_statement(module, function, &mut catch_instructions, stmt)?;
+                    translate_body_element(module, function, &mut catch_instructions, stmt)?;
                 }
 
                 wasm_catches.push((format!("${ident}"), catch_instructions));
@@ -3296,7 +3577,7 @@ fn translate_body_element(
             let catch_all = if let Some(statements) = &catch_all {
                 let mut instructions = Vec::new();
                 for stmt in statements {
-                    translate_statement(module, function, &mut instructions, stmt)?;
+                    translate_body_element(module, function, &mut instructions, stmt)?;
                 }
 
                 Some(instructions)
@@ -3311,6 +3592,33 @@ fn translate_body_element(
             ));
         }
         BodyElement::Statement(stmt) => translate_statement(module, function, instructions, stmt)?,
+        BodyElement::If {
+            condition,
+            body,
+            r#else,
+        } => {
+            translate_expression(module, function, instructions, condition, None, None)?;
+            let mut then_instructions = Vec::new();
+
+            for stmt in body {
+                translate_body_element(module, function, &mut then_instructions, stmt)?;
+            }
+
+            let else_instructions = if let Some(body) = r#else {
+                let mut else_instructions = Vec::new();
+                for stmt in body {
+                    translate_body_element(module, function, &mut else_instructions, stmt)?;
+                }
+                Some(else_instructions)
+            } else {
+                None
+            };
+
+            instructions.push(WatInstruction::r#if(then_instructions, else_instructions))
+        }
+        BodyElement::While { condition, body } => {
+            translate_while_loop(module, function, instructions, condition, body)?;
+        }
     }
 
     Ok(())
@@ -3443,7 +3751,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             module
         }
     };
-    // println!("output:\n{}", output);
+    println!("output:\n{}", output);
 
     output.into()
 }
