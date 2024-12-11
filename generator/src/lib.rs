@@ -8,8 +8,8 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     token::{self, Brace, Semi},
-    Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop, ExprUnary, Lit, LitStr, Local, Meta,
-    Pat, PatType, Type,
+    AngleBracketedGenericArguments, Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop,
+    ExprUnary, GenericArgument, Lit, LitStr, Local, Meta, Pat, PatType, PathArguments, Type,
 };
 
 extern crate proc_macro;
@@ -78,10 +78,6 @@ impl GlobalScope {
             self.module
                 .add_export(&*export_name, "func", format!("${}", function.name));
             *export_next = None;
-
-            let wat_function = self.function_to_wat_function_signature(&function)?;
-            self.module.functions.push(wat_function);
-            self.functions.push(function);
         } else if let Some((namespace, name)) = import_next {
             self.module.add_import(
                 &*namespace,
@@ -98,11 +94,11 @@ impl GlobalScope {
             );
 
             *import_next = None;
-        } else {
-            let wat_function = self.function_to_wat_function_signature(&function)?;
-            self.module.functions.push(wat_function);
-            self.functions.push(function);
         }
+
+        let wat_function = self.function_to_wat_function_signature(&function)?;
+        self.module.functions.push(wat_function);
+        self.functions.push(function);
 
         Ok(())
     }
@@ -381,7 +377,7 @@ impl GlobalScope {
             Global {
                 name,
                 ty,
-                init: init,
+                init,
                 mutable,
             },
         );
@@ -1269,11 +1265,11 @@ fn translate_binary(
         }
         syn::BinOp::SubAssign(op) => {
             let instruction = match ty {
-                WasmType::I32 => WatInstruction::I32Add,
-                WasmType::I64 => WatInstruction::I64Add,
-                WasmType::F32 => WatInstruction::F32Add,
-                WasmType::F64 => WatInstruction::F64Add,
-                WasmType::I8 => WatInstruction::I32Add,
+                WasmType::I32 => WatInstruction::I32Sub,
+                WasmType::I64 => WatInstruction::I64Sub,
+                WasmType::F32 => WatInstruction::F32Sub,
+                WasmType::F64 => WatInstruction::F64Sub,
+                WasmType::I8 => WatInstruction::I32Sub,
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
@@ -1296,6 +1292,24 @@ fn translate_binary(
     }
 
     Ok(())
+}
+
+fn get_memory_type(path: &syn::Path) -> Result<Option<WasmType>> {
+    let arguments = &path.segments[0].arguments;
+    if let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) = arguments {
+        if let GenericArgument::Type(Type::Path(path)) = &args[0] {
+            let ty: WasmType = path.path.segments[0]
+                .ident
+                .to_string()
+                .parse()
+                .map_err(|_| {
+                    syn::Error::new_spanned(path, "Couldn't convert given type to WASM")
+                })?;
+            return Ok(Some(ty));
+        }
+    }
+
+    Ok(None)
 }
 
 fn get_type(
@@ -1323,7 +1337,11 @@ fn get_type(
             function
                 .locals
                 .get(name)
-                .or(function.params.iter().find(|p| &p.0 == name).map(|p| &p.1))
+                .or(function
+                    .params
+                    .iter()
+                    .find(|(param_name, _)| param_name.as_ref().unwrap_or(&String::new()) == name)
+                    .map(|p| &p.1))
                 .ok_or(anyhow!("Could not find local {name}"))
                 .unwrap()
                 .clone(),
@@ -1405,7 +1423,6 @@ fn get_type(
         WatInstruction::F64Eq => Some(WasmType::I32),
         WatInstruction::I64ExtendI32S => Some(WasmType::I64),
         WatInstruction::I32WrapI64 => Some(WasmType::I32),
-        WatInstruction::I31GetS => Some(WasmType::I32),
         WatInstruction::F64PromoteF32 => Some(WasmType::F64),
         WatInstruction::F32DemoteF64 => Some(WasmType::F32),
         WatInstruction::I32Sub => Some(WasmType::I32),
@@ -1427,38 +1444,38 @@ fn get_type(
         WatInstruction::I32RemU => Some(WasmType::I32),
         WatInstruction::I64RemU => Some(WasmType::I64),
         WatInstruction::I32Ne => Some(WasmType::I32),
-        WatInstruction::I64Ne => Some(WasmType::I64),
-        WatInstruction::F32Ne => Some(WasmType::F32),
-        WatInstruction::F64Ne => Some(WasmType::F64),
+        WatInstruction::I64Ne => Some(WasmType::I32),
+        WatInstruction::F32Ne => Some(WasmType::I32),
+        WatInstruction::F64Ne => Some(WasmType::I32),
         WatInstruction::I32And => Some(WasmType::I32),
-        WatInstruction::I64And => Some(WasmType::I64),
+        WatInstruction::I64And => Some(WasmType::I32),
         WatInstruction::I32Or => Some(WasmType::I32),
-        WatInstruction::I64Or => Some(WasmType::I64),
+        WatInstruction::I64Or => Some(WasmType::I32),
         WatInstruction::I32Xor => Some(WasmType::I32),
-        WatInstruction::I64Xor => Some(WasmType::I64),
+        WatInstruction::I64Xor => Some(WasmType::I32),
         WatInstruction::I32LtS => Some(WasmType::I32),
-        WatInstruction::I64LtS => Some(WasmType::I64),
+        WatInstruction::I64LtS => Some(WasmType::I32),
         WatInstruction::I32LtU => Some(WasmType::I32),
-        WatInstruction::I64LtU => Some(WasmType::I64),
-        WatInstruction::F32Lt => Some(WasmType::F32),
-        WatInstruction::F64Lt => Some(WasmType::F64),
+        WatInstruction::I64LtU => Some(WasmType::I32),
+        WatInstruction::F32Lt => Some(WasmType::I32),
+        WatInstruction::F64Lt => Some(WasmType::I32),
         WatInstruction::I32LeS => Some(WasmType::I32),
-        WatInstruction::I64LeS => Some(WasmType::I64),
+        WatInstruction::I64LeS => Some(WasmType::I32),
         WatInstruction::I32LeU => Some(WasmType::I32),
-        WatInstruction::I64LeU => Some(WasmType::I64),
-        WatInstruction::F32Le => Some(WasmType::F32),
-        WatInstruction::F64Le => Some(WasmType::F64),
-        WatInstruction::I64GeS => Some(WasmType::I64),
+        WatInstruction::I64LeU => Some(WasmType::I32),
+        WatInstruction::F32Le => Some(WasmType::I32),
+        WatInstruction::F64Le => Some(WasmType::I32),
+        WatInstruction::I64GeS => Some(WasmType::I32),
         WatInstruction::I32GeU => Some(WasmType::I32),
-        WatInstruction::I64GeU => Some(WasmType::I64),
-        WatInstruction::F32Ge => Some(WasmType::F32),
-        WatInstruction::F64Ge => Some(WasmType::F64),
+        WatInstruction::I64GeU => Some(WasmType::I32),
+        WatInstruction::F32Ge => Some(WasmType::I32),
+        WatInstruction::F64Ge => Some(WasmType::I32),
         WatInstruction::I32GtS => Some(WasmType::I32),
-        WatInstruction::I64GtS => Some(WasmType::I64),
+        WatInstruction::I64GtS => Some(WasmType::I32),
         WatInstruction::I32GtU => Some(WasmType::I32),
-        WatInstruction::I64GtU => Some(WasmType::I64),
-        WatInstruction::F32Gt => Some(WasmType::F32),
-        WatInstruction::F64Gt => Some(WasmType::F64),
+        WatInstruction::I64GtU => Some(WasmType::I32),
+        WatInstruction::F32Gt => Some(WasmType::I32),
+        WatInstruction::F64Gt => Some(WasmType::I32),
         WatInstruction::I32ShlS => Some(WasmType::I32),
         WatInstruction::I64ShlS => Some(WasmType::I64),
         WatInstruction::I32ShlU => Some(WasmType::I32),
@@ -1508,8 +1525,8 @@ fn get_type(
         WatInstruction::I64TruncF32U => Some(WasmType::I64),
         WatInstruction::I64TruncF64S => Some(WasmType::I64),
         WatInstruction::I64TruncF64U => Some(WasmType::I64),
-        WatInstruction::I32GetS => Some(WasmType::I32),
-        WatInstruction::I32GetU => Some(WasmType::I32),
+        WatInstruction::I31GetS => Some(WasmType::I32),
+        WatInstruction::I31GetU => Some(WasmType::I32),
         WatInstruction::RefCast(ty) => Some(ty.clone()),
         WatInstruction::RefTest(_) => Some(WasmType::I32),
     })
@@ -1648,6 +1665,7 @@ fn translate_while_loop(
         Some(&WasmType::I32),
     )?;
 
+    instructions.push(WatInstruction::i32_eqz());
     instructions.push(WatInstruction::br_if("$block-label"));
 
     for stmt in body {
@@ -1685,6 +1703,7 @@ fn translate_for_loop(
         WatInstruction::local_get(&i_local),
         WatInstruction::local_get(&length_local),
         WatInstruction::I32GeS,
+        WatInstruction::I32Eqz,
         WatInstruction::br_if("$block-label"),
     ];
 
@@ -1828,7 +1847,7 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
         || function
             .params
             .iter()
-            .any(|(name, _)| name.as_ref() == label)
+            .any(|(name, _)| name.as_ref().unwrap_or(&String::new()) == &label)
     {
         Some(LabelType::Local)
     } else if module
@@ -1860,12 +1879,12 @@ fn get_type_for_a_label(
     } else if function
         .params
         .iter()
-        .any(|(name, _)| name.as_ref() == label)
+        .any(|(name, _)| name.as_ref().unwrap_or(&String::new()) == &label)
     {
         let ty = function
             .params
             .iter()
-            .find(|(name, _)| name.as_ref() == label)
+            .find(|(name, _)| name.as_ref().unwrap_or(&String::new()) == &label)
             .map(|(_, ty)| ty)
             .cloned();
 
@@ -2010,6 +2029,8 @@ fn translate_expression(
                                 current_block.push(WatInstruction::array_set(array_type));
                             }
                             LabelType::Memory => {
+                                let memory_type = get_memory_type(path)?;
+
                                 translate_expression(
                                     module,
                                     function,
@@ -2019,20 +2040,19 @@ fn translate_expression(
                                     None,
                                 )?;
 
-                                let ty = get_type(module, function, current_block);
+                                let ty = memory_type.unwrap_or(WasmType::I32);
                                 match ty {
-                                    Some(WasmType::I32) => {
+                                    WasmType::I32 => {
                                         current_block
                                             .push(WatInstruction::I32Store(Some(target_name)));
                                     }
-                                    Some(WasmType::I8) => {
+                                    WasmType::I8 => {
                                         current_block
                                             .push(WatInstruction::I32Store8(Some(target_name)));
                                     }
-                                    Some(t) => {
+                                    t => {
                                         todo!("memory access with type {t} not implemented");
                                     }
-                                    None => panic!("type has to be known for memory access"),
                                 }
                             }
                             LabelType::Func => {}
@@ -2432,17 +2452,17 @@ fn translate_expression(
                     // this should never happen?
                     WasmType::I8 => todo!("convert i8"),
                     WasmType::I31Ref => match target_type {
-                        WasmType::I32 => current_block.push(WatInstruction::I32GetS),
+                        WasmType::I32 => current_block.push(WatInstruction::I31GetS),
                         WasmType::I64 => {
-                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::I31GetS);
                             current_block.push(WatInstruction::I64ExtendI32S);
                         }
                         WasmType::F32 => {
-                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::I31GetS);
                             current_block.push(WatInstruction::F32ConvertI32S);
                         }
                         WasmType::F64 => {
-                            current_block.push(WatInstruction::I32GetS);
+                            current_block.push(WatInstruction::I31GetS);
                             current_block.push(WatInstruction::F64ConvertI32S);
                         }
                         WasmType::I31Ref => {}
@@ -2604,19 +2624,22 @@ fn translate_expression(
                             current_block.push(WatInstruction::array_get(array_type));
                         }
                     }
-                    LabelType::Memory => match ty {
-                        Some(WasmType::I32) => {
-                            current_block.push(WatInstruction::I32Load(target_name.into()));
+                    LabelType::Memory => {
+                        let memory_type = get_memory_type(path)?;
+                        match memory_type {
+                            Some(WasmType::I32) => {
+                                current_block.push(WatInstruction::I32Load(target_name.into()));
+                            }
+                            Some(WasmType::I8) => {
+                                current_block.push(WatInstruction::I32Load8S(target_name.into()));
+                            }
+                            Some(ty) => todo!("memory access other type {ty}"),
+                            None => {
+                                // default to i32
+                                current_block.push(WatInstruction::I32Load(target_name.into()));
+                            }
                         }
-                        Some(WasmType::I8) => {
-                            current_block.push(WatInstruction::I32Load8S(target_name.into()));
-                        }
-                        Some(ty) => todo!("memory access other type {ty}"),
-                        None => {
-                            // default to i32
-                            current_block.push(WatInstruction::I32Load(target_name.into()));
-                        }
-                    },
+                    }
                     LabelType::Func => panic!("can't index a function reference"),
                 }
             } else {
@@ -3000,7 +3023,7 @@ impl ToTokens for OurWatInstruction {
                 todo!("impl ToTokens for OurWatInstruction: WatInstruction::Identifier(_) ")
             }
             Drop => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::Drop ")
+                quote! { #w::Drop }
             }
             LocalTee(name) => quote! { #w::LocalTee(#name.to_string()) },
             RefI31 => {
@@ -3162,8 +3185,8 @@ impl ToTokens for OurWatInstruction {
             I64TruncF32U => quote! { #w::I64TruncF32U },
             I64TruncF64S => quote! { #w::I64TruncF64S },
             I64TruncF64U => quote! { #w::I64TruncF64U },
-            I32GetS => quote! { #w::I32GetS },
-            I32GetU => quote! { #w::I32GetU },
+            I31GetS => quote! { #w::I31GetS },
+            I31GetU => quote! { #w::I31GetU },
             RefCast(ty) => {
                 let ty = OurWasmType(ty.clone());
                 quote! {
@@ -3523,6 +3546,18 @@ fn translate_statement(
         Stmt::Item(_) => todo!("Stmt::Item(_) "),
         Stmt::Expr(expr, semi) => {
             translate_expression(module, function, instructions, expr, *semi, None)?;
+            if let Expr::Call(_) = expr {
+                // if this is a single function call, it means we're not doing anything with the
+                // results, thus we add drop
+                let last = instructions.last();
+                if let Some(WatInstruction::Call(name)) = last {
+                    if let Some(function) = module.get_function(name) {
+                        for _ in &function.results {
+                            instructions.push(WatInstruction::drop());
+                        }
+                    }
+                }
+            }
         }
         Stmt::Macro(stmt_macro) => {
             translate_macro(
@@ -3630,7 +3665,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
 
     let data = global_scope.module.data.into_iter().map(|(offset, data)| {
         quote! {
-            module.data.push((#offset, #data.to_string()));
+            module.add_data_raw(#offset, #data.to_string());
         }
     });
 
@@ -3685,6 +3720,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
     let imports = global_scope
         .module
         .imports
+        .clone()
         .into_iter()
         .map(|(namespace, name, ty)| {
             let ty = OurWasmType(ty);
@@ -3719,14 +3755,30 @@ pub fn wasm(input: TokenStream) -> TokenStream {
                 module.add_memory(#label, #size, #max_size_q);
             }
         });
-    let functions = global_scope.module.functions.into_iter().map(|f| {
-        let our = OurWatFunction(f.clone());
-        quote! {
-            #our
+    let functions = global_scope
+        .module
+        .functions
+        .into_iter()
+        .map(|f| {
+            // Filter out import functions
+            if global_scope.module.imports.iter().any(|(_, _, ty)| {
+                if let WasmType::Func { name, signature: _ } = ty {
+                    format!("${}", f.name) == name.clone().unwrap_or(String::new())
+                } else {
+                    false
+                }
+            }) {
+                None
+            } else {
+                let our = OurWatFunction(f.clone());
+                Some(quote! {
+                    #our
 
-            module.add_function(function);
-        }
-    });
+                    module.add_function(function);
+                })
+            }
+        })
+        .flatten();
 
     let output = quote! {
         {
@@ -3751,7 +3803,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             module
         }
     };
-    println!("output:\n{}", output);
+    // println!("output:\n{}", output);
 
     output.into()
 }

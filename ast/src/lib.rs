@@ -30,12 +30,16 @@ pub struct StructField {
 
 impl fmt::Display for StructField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = self.name.clone().unwrap_or_default();
+        let mut name = self.name.clone().unwrap_or_default();
         let ty = if self.mutable {
             format!("(mut {})", self.ty)
         } else {
             format!("{}", self.ty)
         };
+        // TODO: it would be nice to actually fix it downstream
+        if !name.starts_with("$") {
+            name = format!("${name}");
+        }
         write!(f, "(field {name} {ty})")
     }
 }
@@ -363,7 +367,6 @@ pub enum WatInstruction {
 
     I64ExtendI32S,
     I32WrapI64,
-    I31GetS,
     F64PromoteF32,
     F32DemoteF64,
 
@@ -387,8 +390,8 @@ pub enum WatInstruction {
     I64TruncF64S,
     I64TruncF64U,
 
-    I32GetS,
-    I32GetU,
+    I31GetS,
+    I31GetU,
 
     I32Store(Option<String>),
     I64Store(Option<String>),
@@ -920,26 +923,26 @@ impl fmt::Display for WatInstruction {
 
             WatInstruction::F32ConvertI32S => writeln!(f, "(f32.convert_i32_s)"),
             WatInstruction::F32ConvertI32U => writeln!(f, "(f32.convert_i32_u)"),
-            WatInstruction::F32ConvertI64S => writeln!(f, "(f64.convert_i64_s)"),
-            WatInstruction::F32ConvertI64U => writeln!(f, "(f64.convert_i64_u)"),
+            WatInstruction::F32ConvertI64S => writeln!(f, "(f32.convert_i64_s)"),
+            WatInstruction::F32ConvertI64U => writeln!(f, "(f32.convert_i64_u)"),
 
-            WatInstruction::F64ConvertI32S => writeln!(f, "(f32.convert_i32_s)"),
-            WatInstruction::F64ConvertI32U => writeln!(f, "(f32.convert_i32_u)"),
+            WatInstruction::F64ConvertI32S => writeln!(f, "(f64.convert_i32_s)"),
+            WatInstruction::F64ConvertI32U => writeln!(f, "(f64.convert_i32_u)"),
             WatInstruction::F64ConvertI64S => writeln!(f, "(f64.convert_i64_s)"),
             WatInstruction::F64ConvertI64U => writeln!(f, "(f64.convert_i64_u)"),
 
-            WatInstruction::I32TruncF32S => writeln!(f, "(i32.truc_f32_s)"),
-            WatInstruction::I32TruncF32U => writeln!(f, "(i32.truc_f32_u)"),
-            WatInstruction::I32TruncF64S => writeln!(f, "(i32.truc_f64_s)"),
-            WatInstruction::I32TruncF64U => writeln!(f, "(i32.truc_f64_u)"),
+            WatInstruction::I32TruncF32S => writeln!(f, "(i32.trunc_f32_s)"),
+            WatInstruction::I32TruncF32U => writeln!(f, "(i32.trunc_f32_u)"),
+            WatInstruction::I32TruncF64S => writeln!(f, "(i32.trunc_f64_s)"),
+            WatInstruction::I32TruncF64U => writeln!(f, "(i32.trunc_f64_u)"),
 
-            WatInstruction::I64TruncF32S => writeln!(f, "(i64.truc_f32_s)"),
-            WatInstruction::I64TruncF32U => writeln!(f, "(i64.truc_f32_u)"),
-            WatInstruction::I64TruncF64S => writeln!(f, "(i64.truc_f64_s)"),
-            WatInstruction::I64TruncF64U => writeln!(f, "(i64.truc_f64_u)"),
+            WatInstruction::I64TruncF32S => writeln!(f, "(i64.trunc_f32_s)"),
+            WatInstruction::I64TruncF32U => writeln!(f, "(i64.trunc_f32_u)"),
+            WatInstruction::I64TruncF64S => writeln!(f, "(i64.trunc_f64_s)"),
+            WatInstruction::I64TruncF64U => writeln!(f, "(i64.trunc_f64_u)"),
 
-            WatInstruction::I32GetS => writeln!(f, "(i32.get_s)"),
-            WatInstruction::I32GetU => writeln!(f, "(i32.get_u)"),
+            WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
+            WatInstruction::I31GetU => writeln!(f, "(i31.get_u)"),
             WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
             WatInstruction::RefTest(ty) => {
                 let ty_str = match ty {
@@ -957,7 +960,7 @@ impl fmt::Display for WatInstruction {
 #[derive(Debug, Clone)]
 pub struct WatFunction {
     pub name: String,
-    pub params: Vec<(String, WasmType)>,
+    pub params: Vec<(Option<String>, WasmType)>,
     pub results: Vec<WasmType>,
     pub locals: HashMap<String, WasmType>,
     pub locals_counters: HashMap<String, u32>,
@@ -977,7 +980,7 @@ impl WatFunction {
     }
 
     pub fn add_param(&mut self, name: impl Into<String>, type_: &WasmType) {
-        self.params.push((name.into(), type_.clone()));
+        self.params.push((Some(name.into()), type_.clone()));
     }
 
     pub fn set_results(&mut self, results: Vec<WasmType>) {
@@ -1020,7 +1023,12 @@ impl fmt::Display for WatFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(func ${}", self.name)?;
         for (name, type_) in &self.params {
-            write!(f, " (param {} {})", name, type_)?;
+            let param_str = vec![name.clone(), Some(type_.to_string())]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<String>>()
+                .join(" ");
+            write!(f, " (param {param_str})")?;
         }
         if self.has_results() {
             write!(f, " (result ")?;
@@ -1130,17 +1138,22 @@ impl WatModule {
         if let Some(offset) = self.data_offsets.get(&content) {
             (*offset, len)
         } else {
-            self.data.push((offset, content.clone()));
-            self.data_offsets.insert(content, offset);
-            self.data_offset += if len % 4 == 0 {
-                len
-            } else {
-                // some runtimes expect all data aligned to 4 bytes
-                len + (4 - len % 4)
-            };
-
-            (offset, len)
+            self.add_data_raw(offset, content)
         }
+    }
+
+    pub fn add_data_raw(&mut self, offset: usize, content: String) -> (usize, usize) {
+        let len = content.len();
+        self.data.push((offset, content.clone()));
+        self.data_offsets.insert(content, offset);
+        self.data_offset += if len % 4 == 0 {
+            len
+        } else {
+            // some runtimes expect all data aligned to 4 bytes
+            len + (4 - len % 4)
+        };
+
+        (offset, len)
     }
 
     pub fn add_memory(&mut self, label: impl Into<String>, size: i32, max_size: Option<i32>) {
@@ -1186,6 +1199,14 @@ impl WatModule {
 
         None
     }
+
+    pub fn append(&mut self, other: &mut Self) {
+        self.types.append(&mut other.types);
+        self.tags.append(&mut other.tags);
+        self.imports.append(&mut other.imports);
+        self.functions.append(&mut other.functions);
+        self.exports.append(&mut other.exports);
+    }
 }
 
 impl fmt::Display for WatModule {
@@ -1193,7 +1214,28 @@ impl fmt::Display for WatModule {
         writeln!(f, "(module")?;
         // Imports
         for (module, name, type_) in &self.imports {
-            writeln!(f, "  (import \"{}\" \"{}\" {})", module, name, type_)?;
+            let type_str = match type_ {
+                WasmType::Func { name, signature } => {
+                    let params_str = signature
+                        .params
+                        .iter()
+                        .map(|(_, ty)| format!("(param {ty})"))
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    let result_option = signature
+                        .result
+                        .as_ref()
+                        .map(|result| format!("(result {result})"));
+                    let signature_str = vec![name.clone(), Some(params_str), result_option]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    format!("(func {signature_str})")
+                }
+                _ => type_.to_string(),
+            };
+            writeln!(f, "  (import \"{}\" \"{}\" {})", module, name, type_str)?;
         }
 
         // Memories
