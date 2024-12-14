@@ -464,6 +464,7 @@ pub enum WatInstruction {
     },
     Catch(String, InstructionsList),
     CatchAll(InstructionsList),
+    RefEq,
 }
 
 impl WatInstruction {
@@ -953,6 +954,7 @@ impl fmt::Display for WatInstruction {
                 };
                 writeln!(f, "(ref.test {ty_str})")
             }
+            WatInstruction::RefEq => writeln!(f, "(ref.eq)"),
         }
     }
 }
@@ -1138,20 +1140,21 @@ impl WatModule {
         if let Some(offset) = self.data_offsets.get(&content) {
             (*offset, len)
         } else {
-            self.add_data_raw(offset, content)
+            self._add_data_raw(offset, content)
         }
     }
 
-    pub fn add_data_raw(&mut self, offset: usize, content: String) -> (usize, usize) {
+    pub fn _add_data_raw(&mut self, offset: usize, content: String) -> (usize, usize) {
         let len = content.len();
         self.data.push((offset, content.clone()));
-        self.data_offsets.insert(content, offset);
-        self.data_offset += if len % 4 == 0 {
+        self.data_offsets.insert(content.clone(), offset);
+        let increment = if len % 4 == 0 {
             len
         } else {
             // some runtimes expect all data aligned to 4 bytes
             len + (4 - len % 4)
         };
+        self.data_offset += increment;
 
         (offset, len)
     }
@@ -1265,7 +1268,7 @@ impl fmt::Display for WatModule {
             for &byte in data.as_bytes() {
                 match byte {
                     b'"' => write!(f, "\\\"")?,
-                    b'\\' => write!(f, "\\\\")?,
+                    b'\\' => write!(f, "\\")?,
                     b'\n' => write!(f, "\\n")?,
                     b'\r' => write!(f, "\\r")?,
                     b'\t' => write!(f, "\\t")?,

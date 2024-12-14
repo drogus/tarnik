@@ -8,6 +8,32 @@ mod tests {
     use tarnik_ast::WatModule;
 
     #[test]
+    fn test_ref_equality() -> anyhow::Result<()> {
+        let module: WatModule = wasm! {
+            memory!("memory", 1);
+
+            struct Foo {}
+
+            fn run() {
+                let foo_1: Foo = Foo {};
+                let foo_2: Foo = foo_1;
+                let foo_3: Foo = Foo {};
+                let foo_4: Foo = foo_3;
+
+                assert(foo_1 == foo_2, "the references foo_1 and foo_2 should match");
+                assert(foo_3 == foo_4, "the references foo_3 and foo_4 should match");
+                assert(foo_1 != foo_3, "the references foo_1 and foo_3 should not match");
+                assert(foo_1 != foo_4, "the references foo_1 and foo_4 should not match");
+            }
+        };
+
+        let runner = TestRunner::new()?;
+        let (code, stdout, stderr) = runner.run_wasm_test(module)?;
+        assert_eq!(code, 0, "stdout: {}\nstderr: {}", stdout, stderr);
+        Ok(())
+    }
+
+    #[test]
     fn test_data() -> anyhow::Result<()> {
         let module: WatModule = wasm! {
             memory!("memory", 1);

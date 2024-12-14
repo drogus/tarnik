@@ -1144,13 +1144,13 @@ fn translate_binary(
                 WasmType::F32 => WatInstruction::F32Eq,
                 WasmType::F64 => WatInstruction::F64Eq,
                 WasmType::I8 => WatInstruction::I32Eq,
-                WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
-                WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
-                WasmType::NullRef => todo!("translate_binary: WasmType::NullRef "),
-                WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
-                WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
-                WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
-                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
+                WasmType::I31Ref => WatInstruction::RefEq,
+                WasmType::Anyref => WatInstruction::RefEq,
+                WasmType::NullRef => WatInstruction::RefEq,
+                WasmType::Ref(_, _) => WatInstruction::RefEq,
+                WasmType::Array { .. } => WatInstruction::RefEq,
+                WasmType::Struct(_) => WatInstruction::RefEq,
+                WasmType::Func { .. } => WatInstruction::RefEq,
                 WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
             };
 
@@ -1197,13 +1197,13 @@ fn translate_binary(
                 WasmType::F32 => WatInstruction::F32Ne,
                 WasmType::F64 => WatInstruction::F64Ne,
                 WasmType::I8 => WatInstruction::I32Ne,
-                WasmType::I31Ref => todo!("translate_binary: WasmType::I31Ref"),
-                WasmType::Anyref => todo!("translate_binary: WasmType::Anyref "),
-                WasmType::NullRef => todo!("translate_binary: WasmType::NullRef "),
-                WasmType::Ref(_, _) => todo!("translate_binary: WasmType::Ref(_, _) "),
-                WasmType::Array { .. } => todo!("translate_binary: WasmType::Array(_) "),
-                WasmType::Struct(_) => todo!("translate_binary: WasmType::Struct(_) "),
-                WasmType::Func { .. } => todo!("translate_binary: WasmType::Func(_) "),
+                WasmType::I31Ref => WatInstruction::RefEq,
+                WasmType::Anyref => WatInstruction::RefEq,
+                WasmType::NullRef => WatInstruction::RefEq,
+                WasmType::Ref(_, _) => WatInstruction::RefEq,
+                WasmType::Array { .. } => WatInstruction::RefEq,
+                WasmType::Struct(_) => WatInstruction::RefEq,
+                WasmType::Func { .. } => WatInstruction::RefEq,
                 WasmType::Tag { .. } => todo!("translate_binary: WasmType::Tag(_) "),
             };
 
@@ -1526,6 +1526,7 @@ fn get_type(
         WatInstruction::I31GetU => Some(WasmType::I32),
         WatInstruction::RefCast(ty) => Some(ty.clone()),
         WatInstruction::RefTest(_) => Some(WasmType::I32),
+        WatInstruction::RefEq => Some(WasmType::I32),
     })
 }
 
@@ -3196,6 +3197,7 @@ impl ToTokens for OurWatInstruction {
                     #w::RefTest(#ty)
                 }
             }
+            RefEq => quote! { #w::RefEq },
         };
         tokens.extend(tokens_str);
     }
@@ -3662,7 +3664,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
 
     let data = global_scope.module.data.into_iter().map(|(offset, data)| {
         quote! {
-            module.add_data_raw(#offset, #data.to_string());
+            module._add_data_raw(#offset, #data.to_string());
         }
     });
 
