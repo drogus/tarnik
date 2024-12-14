@@ -818,17 +818,14 @@ fn translate_unary(
             };
 
             let mut instructions = match ty {
-                // There is no neg instruction for integer types, so for integer types we multiply
-                // by -1
-                WasmType::I32 => vec![WatInstruction::I32Const(-1), WatInstruction::I32Mul],
-                WasmType::I64 => vec![WatInstruction::I64Const(-1), WatInstruction::I64Mul],
-                WasmType::F32 => vec![WatInstruction::F32Neg],
-                WasmType::F64 => vec![WatInstruction::F64Neg],
-                WasmType::I8 => vec![WatInstruction::i32_const(-1), WatInstruction::I32Mul],
+                WasmType::I32 => vec![WatInstruction::I32Eqz],
+                WasmType::I64 => vec![WatInstruction::I64Eqz],
+                WasmType::F32 => vec![WatInstruction::F32Eqz],
+                WasmType::F64 => vec![WatInstruction::F64Eqz],
+                WasmType::I8 => vec![WatInstruction::i32_eqz()],
                 WasmType::I31Ref => vec![
                     WatInstruction::I31GetS,
-                    WatInstruction::i32_const(-1),
-                    WatInstruction::I32Mul,
+                    WatInstruction::I32Eqz,
                     WatInstruction::RefI31,
                 ],
                 _ => {
