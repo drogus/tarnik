@@ -1377,7 +1377,7 @@ fn get_type(
         }
         WatInstruction::StructSet(_, _) => todo!("get_type: WatInstruction::StructSet(_) "),
         WatInstruction::ArrayNew(_) => todo!("get_type: WatInstruction::ArrayNew(_) "),
-        WatInstruction::RefNull(_) => todo!("get_type: WatInstruction::RefNull(_) "),
+        WatInstruction::RefNull(_) => Some(WasmType::NullRef),
         WatInstruction::Ref(_) => todo!("get_type: WatInstruction::Ref(_) "),
         WatInstruction::RefFunc(_) => todo!("get_type: WatInstruction::RefFunc(_) "),
         WatInstruction::Type(_) => todo!("get_type: WatInstruction::Type(_) "),
@@ -1803,7 +1803,12 @@ fn translate_lit(
                         WatInstruction::RefI31,
                     ]
                 }
-                t => todo!("translate int lteral: {t:?}"),
+                t => {
+                    return Err(syn::Error::new_spanned(
+                        lit_int,
+                        format!("Not yet implemented, can't translate {t:?} into int"),
+                    ))
+                }
             }
         }
         syn::Lit::Float(lit_float) => {
@@ -2508,7 +2513,33 @@ fn translate_expression(
                     WasmType::Struct(_) => todo!("as struct"),
                     WasmType::Func { .. } => todo!("as func"),
                     WasmType::Tag { .. } => todo!("as tag"),
-                    WasmType::NullRef => todo!("as nullref"),
+                    WasmType::NullRef => match &target_type {
+                        WasmType::I32 => todo!(),
+                        WasmType::I64 => todo!(),
+                        WasmType::F32 => todo!(),
+                        WasmType::F64 => todo!(),
+                        WasmType::I8 => todo!(),
+                        WasmType::I31Ref => todo!(),
+                        WasmType::Anyref => todo!(),
+                        WasmType::NullRef => todo!(),
+                        WasmType::Ref(_, nullable) => {
+                            if let tarnik_ast::Nullable::False = nullable {
+                                return Err(syn::Error::new_spanned(
+                                    &expr_cast.expr,
+                                    "Can't cast null into a non nullable type",
+                                ));
+                            } else {
+                                // Not sure if there's a better way, but we already issued a null
+                                // values, so let's just drop it and issue a better one
+                                current_block.push(WatInstruction::Drop);
+                                current_block.push(WatInstruction::RefNull(target_type.clone()));
+                            }
+                        }
+                        WasmType::Array { mutable, ty } => todo!(),
+                        WasmType::Struct(_) => todo!(),
+                        WasmType::Func { name, signature } => todo!(),
+                        WasmType::Tag { name, signature } => todo!(),
+                    },
                 }
             } else {
                 return Err(syn::Error::new_spanned(

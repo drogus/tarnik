@@ -712,8 +712,8 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32RemU => writeln!(f, "(i32.rem_u)"),
             WatInstruction::I64RemU => writeln!(f, "(i64.rem_u)"),
 
-            WatInstruction::I32ShlS => writeln!(f, "(i32.shl_s)"),
-            WatInstruction::I64ShlS => writeln!(f, "(i64.shl_s)"),
+            WatInstruction::I32ShlS => writeln!(f, "(i32.shl)"),
+            WatInstruction::I64ShlS => writeln!(f, "(i64.shl)"),
             WatInstruction::I32ShlU => writeln!(f, "(i32.shl_u)"),
             WatInstruction::I64ShlU => writeln!(f, "(i64.shl_u)"),
 
