@@ -1,10 +1,13 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{self, Formatter};
+use std::rc::Rc;
 use std::str::FromStr;
 
 pub use indexmap::IndexMap;
 
 pub type InstructionsList = Vec<WatInstruction>;
+pub type InstructionsListWrapped = Rc<RefCell<InstructionsList>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Nullable {
@@ -254,7 +257,7 @@ impl FromStr for WasmType {
     type Err = WasmError;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WatInstruction {
     Nop,
     Local {
@@ -441,15 +444,15 @@ pub enum WatInstruction {
     Block {
         label: String,
         signature: Signature,
-        instructions: InstructionsList,
+        instructions: InstructionsListWrapped,
     },
     Loop {
         label: String,
-        instructions: InstructionsList,
+        instructions: InstructionsListWrapped,
     },
     If {
-        then: InstructionsList,
-        r#else: Option<InstructionsList>,
+        then: InstructionsListWrapped,
+        r#else: Option<InstructionsListWrapped>,
     },
     BrIf(String),
     Br(String),
@@ -461,12 +464,12 @@ pub enum WatInstruction {
     RefI31,
     Throw(String),
     Try {
-        try_block: InstructionsList,
-        catches: Vec<(String, InstructionsList)>,
+        try_block: InstructionsListWrapped,
+        catches: Vec<(String, InstructionsListWrapped)>,
         catch_all: Option<InstructionsList>,
     },
-    Catch(String, InstructionsList),
-    CatchAll(InstructionsList),
+    Catch(String, InstructionsListWrapped),
+    CatchAll(InstructionsListWrapped),
     RefEq,
 }
 
@@ -582,19 +585,22 @@ impl WatInstruction {
         Self::Block {
             label: label.into(),
             signature,
-            instructions,
+            instructions: Rc::new(RefCell::new(instructions)),
         }
     }
 
     pub fn r#loop(label: impl Into<String>, instructions: InstructionsList) -> Self {
         Self::Loop {
             label: label.into(),
-            instructions,
+            instructions: Rc::new(RefCell::new(instructions)),
         }
     }
 
     pub fn r#if(then: InstructionsList, r#else: Option<InstructionsList>) -> Self {
-        Self::If { then, r#else }
+        Self::If {
+            then: Rc::new(RefCell::new(then)),
+            r#else: r#else.map(|e| Rc::new(RefCell::new(e))),
+        }
     }
 
     pub fn br_if(label: impl Into<String>) -> Self {
@@ -635,14 +641,17 @@ impl WatInstruction {
         catch_all: Option<InstructionsList>,
     ) -> Self {
         Self::Try {
-            try_block,
-            catches,
+            try_block: Rc::new(RefCell::new(try_block)),
+            catches: catches
+                .into_iter()
+                .map(|(label, instructions)| (label, Rc::new(RefCell::new(instructions))))
+                .collect(),
             catch_all,
         }
     }
 
     pub fn catch(label: impl Into<String>, instr: InstructionsList) -> Self {
-        Self::Catch(label.into(), instr)
+        Self::Catch(label.into(), Rc::new(RefCell::new(instr)))
     }
 
     pub fn is_return(&self) -> bool {
@@ -660,6 +669,15 @@ impl WatInstruction {
             }
         }
         None
+    }
+
+    pub fn is_block_type(&self) -> bool {
+        matches!(self, Self::Block { .. })
+            || matches!(self, Self::Try { .. })
+            || matches!(self, Self::Catch { .. })
+            || matches!(self, Self::CatchAll { .. })
+            || matches!(self, Self::If { .. })
+            || matches!(self, Self::Loop { .. })
     }
 }
 
@@ -810,7 +828,7 @@ impl fmt::Display for WatInstruction {
                 instructions,
             } => {
                 writeln!(f, "(block {label}")?;
-                for instruction in instructions {
+                for instruction in instructions.borrow().iter() {
                     write!(f, "  {}", instruction)?;
                 }
                 writeln!(f, "  )")
@@ -820,20 +838,20 @@ impl fmt::Display for WatInstruction {
                 instructions,
             } => {
                 writeln!(f, "(loop {label}")?;
-                for instruction in instructions {
+                for instruction in instructions.borrow().iter() {
                     write!(f, "  {}", instruction)?;
                 }
                 writeln!(f, "  )")
             }
             WatInstruction::If { then, r#else } => {
                 write!(f, "(if (then")?;
-                for instruction in then {
+                for instruction in then.borrow().iter() {
                     write!(f, " {}", instruction)?;
                 }
                 write!(f, "  )")?;
                 if let Some(else_block) = r#else {
                     write!(f, " (else")?;
-                    for instruction in else_block {
+                    for instruction in else_block.borrow().iter() {
                         write!(f, " {}", instruction)?;
                     }
                     write!(f, ")")?;
@@ -865,6 +883,7 @@ impl fmt::Display for WatInstruction {
                 catch_all,
             } => {
                 let try_block_str = try_block
+                    .borrow()
                     .iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<String>>()
@@ -875,7 +894,8 @@ impl fmt::Display for WatInstruction {
                     .map(|(name, c)| {
                         format!(
                             "catch {name}\n{}",
-                            c.iter()
+                            c.borrow()
+                                .iter()
                                 .map(|i| i.to_string())
                                 .collect::<Vec<String>>()
                                 .join("")
@@ -901,6 +921,7 @@ impl fmt::Display for WatInstruction {
             }
             WatInstruction::Catch(label, instr) => {
                 let instr_str = instr
+                    .borrow()
                     .iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<String>>()
@@ -910,6 +931,7 @@ impl fmt::Display for WatInstruction {
 
             WatInstruction::CatchAll(instr) => {
                 let instr_str = instr
+                    .borrow()
                     .iter()
                     .map(|i| i.to_string())
                     .collect::<Vec<String>>()
@@ -957,7 +979,6 @@ impl fmt::Display for WatInstruction {
             WatInstruction::F64ReinterpretI64 => writeln!(f, "(f64.reinterpret_i64)"),
             WatInstruction::I64ReinterpretF64 => writeln!(f, "(i64.reinterpret_f64)"),
 
-            WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
             WatInstruction::I31GetU => writeln!(f, "(i31.get_u)"),
             WatInstruction::RefCast(ty) => writeln!(f, "(ref.cast {ty})"),
             WatInstruction::RefTest(ty) => {
@@ -981,7 +1002,7 @@ pub struct WatFunction {
     pub results: Vec<WasmType>,
     pub locals: HashMap<String, WasmType>,
     pub locals_counters: HashMap<String, u32>,
-    pub body: InstructionsList,
+    pub body: InstructionsListWrapped,
 }
 
 impl WatFunction {
@@ -992,8 +1013,12 @@ impl WatFunction {
             results: vec![],
             locals: HashMap::new(),
             locals_counters: HashMap::new(),
-            body: Vec::new(),
+            body: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    pub fn set_body(&mut self, body: InstructionsList) {
+        self.body = Rc::new(RefCell::new(body));
     }
 
     pub fn add_param(&mut self, name: impl Into<String>, type_: &WasmType) {
@@ -1020,16 +1045,16 @@ impl WatFunction {
     }
 
     pub fn add_instruction(&mut self, instruction: WatInstruction) {
-        self.body.push(instruction);
+        self.body.borrow_mut().push(instruction);
     }
 
-    pub fn add_instructions(&mut self, instructions: InstructionsList) {
-        self.body.append(&mut instructions.into());
+    pub fn add_instructions(&mut self, mut instructions: InstructionsList) {
+        self.body.borrow_mut().append(&mut instructions);
     }
 
     pub fn prepend_instructions(&mut self, instructions: InstructionsList) {
         for instruction in instructions.into_iter().rev() {
-            self.body.insert(0, instruction);
+            self.body.borrow_mut().insert(0, instruction);
         }
     }
 
@@ -1041,6 +1066,8 @@ impl WatFunction {
         self.results.push(ty);
     }
 }
+
+pub mod cursor;
 
 impl fmt::Display for WatFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1064,7 +1091,7 @@ impl fmt::Display for WatFunction {
         for (name, type_) in &self.locals {
             writeln!(f, "  (local {} {})", name, type_)?;
         }
-        for instruction in &self.body {
+        for instruction in self.body.borrow().iter() {
             write!(f, "  {}", instruction)?;
         }
         writeln!(f, "  )")
@@ -1230,6 +1257,11 @@ impl WatModule {
         self.imports.append(&mut other.imports);
         self.functions.append(&mut other.functions);
         self.exports.append(&mut other.exports);
+    }
+
+    pub fn cursor_for_function(&self, name: &str) -> Option<cursor::InstructionsCursor> {
+        self.get_function(name)
+            .map(|f| cursor::InstructionsCursor::from_function(self, f))
     }
 }
 

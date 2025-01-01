@@ -429,7 +429,7 @@ impl GlobalScope {
         for stmt in &function.body {
             translate_body_element(&mut self.module, &mut wat_function, &mut instructions, stmt)?;
         }
-        wat_function.body = instructions.into();
+        wat_function.set_body(instructions);
         Ok(wat_function)
     }
 
@@ -3014,7 +3014,8 @@ impl ToTokens for OurWatInstruction {
                 signature,
                 instructions,
             } => {
-                let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
+                let borrowed = instructions.borrow();
+                let instructions = borrowed.iter().map(|i| OurWatInstruction(i.clone()));
                 let signature = OurSignature(signature.clone());
                 quote! {
                     #w::block(#label, #signature, vec![#(#instructions),*])
@@ -3024,22 +3025,25 @@ impl ToTokens for OurWatInstruction {
                 label,
                 instructions,
             } => {
-                let instructions = instructions.iter().map(|i| OurWatInstruction(i.clone()));
+                let borrowed = instructions.borrow();
+                let instructions = borrowed.iter().map(|i| OurWatInstruction(i.clone()));
                 quote! {
                     #w::r#loop(#label, vec![#(#instructions),*])
                 }
             }
             If { then, r#else } => {
-                let then_instructions = then.iter().map(|i| OurWatInstruction(i.clone()));
+                let borrowed = then.borrow();
+                let then_instructions = borrowed.iter().map(|i| OurWatInstruction(i.clone()));
                 let else_code = if let Some(r#else) = r#else {
-                    let else_instructions = r#else.iter().map(|i| OurWatInstruction(i.clone()));
+                    let borrowed = r#else.borrow();
+                    let else_instructions = borrowed.iter().map(|i| OurWatInstruction(i.clone()));
                     quote! { Some(vec![#(#else_instructions),*]) }
                 } else {
                     quote! { None }
                 };
 
                 quote! {
-                    #w::If {then: vec![#(#then_instructions),*], r#else: #else_code }
+                    #w::r#if(vec![#(#then_instructions),*], #else_code)
                 }
             }
             BrIf(label) => quote! { #w::br_if(#label) },
@@ -3066,11 +3070,13 @@ impl ToTokens for OurWatInstruction {
                 catches,
                 catch_all,
             } => {
+                let try_block = try_block.borrow();
                 let try_tokens = try_block
                     .iter()
                     .map(|instr| OurWatInstruction(instr.clone()));
                 let catches_tokens = catches.iter().map(|(name, instructions)| {
-                    let instructions = instructions
+                    let borrowed = instructions.borrow();
+                    let instructions = borrowed
                         .iter()
                         .map(|instr| OurWatInstruction(instr.clone()));
                     quote! { (#name.to_string(), vec![#(#instructions),*]) }
@@ -3084,11 +3090,11 @@ impl ToTokens for OurWatInstruction {
                 };
 
                 quote! {
-                    #w::Try {
-                        try_block: vec![#(#try_tokens),*],
-                        catches: vec![#(#catches_tokens),*],
-                        catch_all: #catch_all_tokens,
-                    }
+                    #w::r#try(
+                        vec![#(#try_tokens),*],
+                        vec![#(#catches_tokens),*],
+                        #catch_all_tokens,
+                    )
                 }
             }
             Catch(_, _) => {
@@ -3250,7 +3256,8 @@ impl ToTokens for OurWatFunction {
             }
         });
 
-        let instructions = wat_function.body.iter().map(|i| {
+        let body = wat_function.body.borrow();
+        let instructions = body.iter().map(|i| {
             let instruction = OurWatInstruction(i.clone());
             quote! { function.add_instruction(#instruction) }
         });
