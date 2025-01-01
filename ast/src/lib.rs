@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt::{self, Formatter};
 use std::str::FromStr;
 
@@ -652,6 +652,15 @@ impl WatInstruction {
     pub fn is_call(&self) -> bool {
         matches!(self, Self::Call { .. })
     }
+
+    pub fn call_name(&self) -> Option<&'_ str> {
+        if self.is_call() {
+            if let Self::Call(name) = self {
+                return Some(name);
+            }
+        }
+        None
+    }
 }
 
 impl fmt::Display for WatInstruction {
@@ -972,7 +981,7 @@ pub struct WatFunction {
     pub results: Vec<WasmType>,
     pub locals: HashMap<String, WasmType>,
     pub locals_counters: HashMap<String, u32>,
-    pub body: VecDeque<WatInstruction>,
+    pub body: InstructionsList,
 }
 
 impl WatFunction {
@@ -983,7 +992,7 @@ impl WatFunction {
             results: vec![],
             locals: HashMap::new(),
             locals_counters: HashMap::new(),
-            body: VecDeque::new(),
+            body: Vec::new(),
         }
     }
 
@@ -1011,11 +1020,17 @@ impl WatFunction {
     }
 
     pub fn add_instruction(&mut self, instruction: WatInstruction) {
-        self.body.push_back(instruction);
+        self.body.push(instruction);
     }
 
     pub fn add_instructions(&mut self, instructions: InstructionsList) {
         self.body.append(&mut instructions.into());
+    }
+
+    pub fn prepend_instructions(&mut self, instructions: InstructionsList) {
+        for instruction in instructions.into_iter().rev() {
+            self.body.insert(0, instruction);
+        }
     }
 
     pub fn has_results(&self) -> bool {
