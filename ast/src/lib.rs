@@ -355,10 +355,8 @@ pub enum WatInstruction {
     F32Gt,
     F64Gt,
 
-    I32ShlS,
-    I64ShlS,
-    I32ShlU,
-    I64ShlU,
+    I32Shl,
+    I64Shl,
 
     I32ShrS,
     I64ShrS,
@@ -389,6 +387,11 @@ pub enum WatInstruction {
     I64TruncF32U,
     I64TruncF64S,
     I64TruncF64U,
+
+    I32ReinterpretF32,
+    F32ReinterpretI32,
+    I64ReinterpretF64,
+    F64ReinterpretI64,
 
     I31GetS,
     I31GetU,
@@ -712,10 +715,8 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I32RemU => writeln!(f, "(i32.rem_u)"),
             WatInstruction::I64RemU => writeln!(f, "(i64.rem_u)"),
 
-            WatInstruction::I32ShlS => writeln!(f, "(i32.shl)"),
-            WatInstruction::I64ShlS => writeln!(f, "(i64.shl)"),
-            WatInstruction::I32ShlU => writeln!(f, "(i32.shl_u)"),
-            WatInstruction::I64ShlU => writeln!(f, "(i64.shl_u)"),
+            WatInstruction::I32Shl => writeln!(f, "(i32.shl)"),
+            WatInstruction::I64Shl => writeln!(f, "(i64.shl)"),
 
             WatInstruction::I32ShrS => writeln!(f, "(i32.shr_s)"),
             WatInstruction::I64ShrS => writeln!(f, "(i64.shr_s)"),
@@ -941,6 +942,11 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64TruncF32U => writeln!(f, "(i64.trunc_f32_u)"),
             WatInstruction::I64TruncF64S => writeln!(f, "(i64.trunc_f64_s)"),
             WatInstruction::I64TruncF64U => writeln!(f, "(i64.trunc_f64_u)"),
+
+            WatInstruction::F32ReinterpretI32 => writeln!(f, "(f32.reinterpret_i32)"),
+            WatInstruction::I32ReinterpretF32 => writeln!(f, "(i32.reinterpret_f32)"),
+            WatInstruction::F64ReinterpretI64 => writeln!(f, "(f64.reinterpret_i64)"),
+            WatInstruction::I64ReinterpretF64 => writeln!(f, "(i64.reinterpret_f64)"),
 
             WatInstruction::I31GetS => writeln!(f, "(i31.get_s)"),
             WatInstruction::I31GetU => writeln!(f, "(i31.get_u)"),

@@ -1109,9 +1109,9 @@ fn translate_binary(
         }
         syn::BinOp::Shl(op) => {
             let instruction = match ty {
-                WasmType::I32 => WatInstruction::I32ShlS,
-                WasmType::I64 => WatInstruction::I64ShlS,
-                WasmType::I8 => WatInstruction::I32ShlS,
+                WasmType::I32 => WatInstruction::I32Shl,
+                WasmType::I64 => WatInstruction::I64Shl,
+                WasmType::I8 => WatInstruction::I32Shl,
                 _ => {
                     return Err(syn::Error::new_spanned(
                         op,
@@ -1473,10 +1473,8 @@ fn get_type(
         WatInstruction::I64GtU => Some(WasmType::I32),
         WatInstruction::F32Gt => Some(WasmType::I32),
         WatInstruction::F64Gt => Some(WasmType::I32),
-        WatInstruction::I32ShlS => Some(WasmType::I32),
-        WatInstruction::I64ShlS => Some(WasmType::I64),
-        WatInstruction::I32ShlU => Some(WasmType::I32),
-        WatInstruction::I64ShlU => Some(WasmType::I64),
+        WatInstruction::I32Shl => Some(WasmType::I32),
+        WatInstruction::I64Shl => Some(WasmType::I64),
         WatInstruction::I32ShrS => Some(WasmType::I32),
         WatInstruction::I64ShrS => Some(WasmType::I64),
         WatInstruction::I32ShrU => Some(WasmType::I32),
@@ -1527,6 +1525,10 @@ fn get_type(
         WatInstruction::RefCast(ty) => Some(ty.clone()),
         WatInstruction::RefTest(_) => Some(WasmType::I32),
         WatInstruction::RefEq => Some(WasmType::I32),
+        WatInstruction::I32ReinterpretF32 => Some(WasmType::I32),
+        WatInstruction::F32ReinterpretI32 => Some(WasmType::F32),
+        WatInstruction::I64ReinterpretF64 => Some(WasmType::I64),
+        WatInstruction::F64ReinterpretI64 => Some(WasmType::F64),
     })
 }
 
@@ -3165,10 +3167,8 @@ impl ToTokens for OurWatInstruction {
             I64GtU => quote! { #w::I64GtU},
             F32Gt => quote! { #w::F32Gt},
             F64Gt => quote! { #w::F64Gt},
-            I32ShlS => quote! { #w::I32ShlS},
-            I64ShlS => quote! { #w::I64ShlS},
-            I32ShlU => quote! { #w::I32ShlU},
-            I64ShlU => quote! { #w::I64ShlU},
+            I32Shl => quote! { #w::I32Shl},
+            I64Shl => quote! { #w::I64Shl},
             I32ShrS => quote! { #w::I32ShrS},
             I64ShrS => quote! { #w::I64ShrS},
             I32ShrU => quote! { #w::I32ShrU},
@@ -3229,6 +3229,10 @@ impl ToTokens for OurWatInstruction {
                 }
             }
             RefEq => quote! { #w::RefEq },
+            I32ReinterpretF32 => quote! { #w::I32ReinterpretF32 },
+            F32ReinterpretI32 => quote! { #w::F32ReinterpretI32 },
+            I64ReinterpretF64 => quote! { #w::I64ReinterpretF64 },
+            F64ReinterpretI64 => quote! { #w::F64ReinterpretI64 },
         };
         tokens.extend(tokens_str);
     }
