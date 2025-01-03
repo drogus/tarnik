@@ -8,3 +8,5 @@ description = "A WASM AST implementation in Rust"
 
 [dependencies]
 indexmap.workspace = true
+anyhow = "1"
+slotmap = "1"

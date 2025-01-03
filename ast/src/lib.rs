@@ -5,6 +5,11 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 pub use indexmap::IndexMap;
+use slotmap::SlotMap;
+
+slotmap::new_key_type! {
+    pub struct FunctionKey;
+}
 
 pub type InstructionsList = Vec<WatInstruction>;
 pub type InstructionsListWrapped = Rc<RefCell<InstructionsList>>;
@@ -83,6 +88,10 @@ impl WasmType {
     pub fn is_numeric(&self) -> bool {
         use WasmType::*;
         matches!(self, I32 | I64 | F32 | I8 | I31Ref)
+    }
+
+    pub fn r#ref(name: impl Into<String>) -> Self {
+        Self::Ref(name.into(), Nullable::False)
     }
 
     pub fn compatible_numeric_types(left: &Self, right: &Self) -> bool {
@@ -466,7 +475,7 @@ pub enum WatInstruction {
     Try {
         try_block: InstructionsListWrapped,
         catches: Vec<(String, InstructionsListWrapped)>,
-        catch_all: Option<InstructionsList>,
+        catch_all: Option<InstructionsListWrapped>,
     },
     Catch(String, InstructionsListWrapped),
     CatchAll(InstructionsListWrapped),
@@ -646,7 +655,7 @@ impl WatInstruction {
                 .into_iter()
                 .map(|(label, instructions)| (label, Rc::new(RefCell::new(instructions))))
                 .collect(),
-            catch_all,
+            catch_all: catch_all.map(|c| Rc::new(RefCell::new(c))),
         }
     }
 
@@ -909,7 +918,8 @@ impl fmt::Display for WatInstruction {
                     .map(|c| {
                         format!(
                             "catch_all\n{}",
-                            c.iter()
+                            c.borrow()
+                                .iter()
                                 .map(|i| i.to_string())
                                 .collect::<Vec<String>>()
                                 .join("")
@@ -1019,6 +1029,15 @@ impl WatFunction {
 
     pub fn set_body(&mut self, body: InstructionsList) {
         self.body = Rc::new(RefCell::new(body));
+    }
+
+    pub fn replace(&mut self, other: WatFunction) {
+        self.name = other.name;
+        self.params = other.params;
+        self.results = other.results;
+        self.locals = other.locals;
+        self.locals_counters = other.locals_counters;
+        self.body = other.body;
     }
 
     pub fn add_param(&mut self, name: impl Into<String>, type_: &WasmType) {
@@ -1132,7 +1151,8 @@ pub struct WatModule {
     pub tags: IndexMap<String, String>,
     pub types: Vec<TypeDefinition>,
     pub imports: Vec<(String, String, WasmType)>,
-    pub functions: Vec<WatFunction>,
+    functions: SlotMap<FunctionKey, WatFunction>,
+    function_keys: Vec<FunctionKey>,
     // TODO: changet it to a struct
     pub exports: Vec<(String, String, String)>,
     pub globals: HashMap<String, Global>,
@@ -1148,18 +1168,58 @@ impl WatModule {
             tags: IndexMap::new(),
             types: Vec::new(),
             imports: Vec::new(),
-            functions: Vec::new(),
+            functions: SlotMap::with_key(),
             exports: Vec::new(),
             globals: HashMap::new(),
             data: Vec::new(),
             data_offset: 100,
             data_offsets: HashMap::new(),
             memories: HashMap::new(),
+            function_keys: Default::default(),
         }
     }
 
+    pub fn function_keys(&self) -> Vec<FunctionKey> {
+        self.function_keys.clone()
+    }
+
     pub fn add_function(&mut self, function: WatFunction) {
-        self.functions.push(function);
+        let key = self.functions.insert(function);
+        self.function_keys.push(key);
+    }
+
+    pub fn functions_mut(&mut self) -> Vec<&mut WatFunction> {
+        self.functions.values_mut().collect()
+    }
+
+    pub fn functions(&self) -> Vec<&WatFunction> {
+        self.functions.values().collect()
+    }
+
+    pub fn get_function_by_key_unchecked(&self, key: FunctionKey) -> &WatFunction {
+        &self.functions[key]
+    }
+
+    pub fn get_function_by_key_unchecked_mut(&mut self, key: FunctionKey) -> &mut WatFunction {
+        match self.functions.get_mut(key) {
+            Some(r) => r,
+            None => panic!("invalid SlotMap key used"),
+        }
+    }
+
+    pub fn get_function_key(&self, name: &str) -> Option<FunctionKey> {
+        let name = if !name.starts_with("$") {
+            format!("${name}")
+        } else {
+            name.to_string()
+        };
+
+        self.function_keys().into_iter().find(|k| {
+            self.functions
+                .get(*k)
+                .map(|f| format!("${}", f.name) == name)
+                .unwrap_or(false)
+        })
     }
 
     pub fn get_function(&self, name: &str) -> Option<&WatFunction> {
@@ -1169,13 +1229,21 @@ impl WatModule {
             name.to_string()
         };
 
-        self.functions
-            .iter()
+        self.functions()
+            .into_iter()
             .find(|f| format!("${}", f.name) == name)
     }
 
     pub fn get_function_mut(&mut self, name: &str) -> Option<&mut WatFunction> {
-        self.functions.iter_mut().find(|f| f.name == name)
+        let name = if !name.starts_with("$") {
+            format!("${name}")
+        } else {
+            name.to_string()
+        };
+
+        self.functions_mut()
+            .into_iter()
+            .find(|f| format!("${}", f.name) == name)
     }
 
     pub fn add_type(&mut self, name: impl Into<String>, ty: WasmType) {
@@ -1255,13 +1323,14 @@ impl WatModule {
         self.types.append(&mut other.types);
         self.tags.append(&mut other.tags);
         self.imports.append(&mut other.imports);
-        self.functions.append(&mut other.functions);
+        for function in other.functions() {
+            self.add_function(function.clone());
+        }
         self.exports.append(&mut other.exports);
     }
 
-    pub fn cursor_for_function(&self, name: &str) -> Option<cursor::InstructionsCursor> {
-        self.get_function(name)
-            .map(|f| cursor::InstructionsCursor::from_function(self, f))
+    pub fn cursor<'a>(&'a mut self) -> cursor::InstructionsCursor<'a> {
+        cursor::InstructionsCursor::new(self)
     }
 }
 
@@ -1351,12 +1420,12 @@ impl fmt::Display for WatModule {
         }
 
         // Function declarations
-        for function in &self.functions {
+        for function in &self.functions() {
             writeln!(f, "  (elem declare func ${})", function.name)?;
         }
 
         // Functions
-        for function in &self.functions {
+        for function in &self.functions() {
             write!(f, "  {}", function)?;
         }
 
@@ -1377,4 +1446,26 @@ fn memory_op(f: &mut Formatter<'_>, instr: &str, _label: &Option<String>) -> fmt
     // } else {
     writeln!(f, "({instr})")
     // }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_function_mut() {
+        let mut module = WatModule::new();
+        let function = WatFunction::new("foo");
+        module.add_function(function);
+
+        let function = module.get_function_mut("foo").unwrap();
+        function.set_body(vec![WatInstruction::call("$bar")]);
+
+        let function = module.get_function("foo");
+
+        assert_eq!(
+            function.unwrap().body.borrow()[0],
+            WatInstruction::call("$bar")
+        );
+    }
 }

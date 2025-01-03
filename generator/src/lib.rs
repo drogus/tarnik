@@ -97,7 +97,7 @@ impl GlobalScope {
         }
 
         let wat_function = self.function_to_wat_function_signature(&function)?;
-        self.module.functions.push(wat_function);
+        self.module.add_function(wat_function);
         self.functions.push(function);
 
         Ok(())
@@ -458,12 +458,15 @@ impl Parse for GlobalScope {
 
         global_scope.parse_global_statements(&mut input)?;
 
-        let mut wat_functions = Vec::new();
         for function in global_scope.functions.clone() {
             let wat_function = global_scope.function_to_wat(&function)?;
-            wat_functions.push(wat_function);
+
+            let existing = global_scope
+                .module
+                .get_function_mut(&wat_function.name)
+                .unwrap();
+            existing.replace(wat_function);
         }
-        global_scope.module.functions = wat_functions;
 
         Ok(global_scope)
     }
@@ -1856,7 +1859,7 @@ fn get_label_type(module: &WatModule, function: &WatFunction, label: &str) -> Op
     {
         Some(LabelType::Local)
     } else if module
-        .functions
+        .functions()
         .iter()
         .any(|f| format!("${}", f.name) == label)
     {
@@ -3082,8 +3085,9 @@ impl ToTokens for OurWatInstruction {
                     quote! { (#name.to_string(), vec![#(#instructions),*]) }
                 });
                 let catch_all_tokens = if let Some(catch_all) = catch_all {
+                    let borrowed = catch_all.borrow();
                     let catch_all_instructions =
-                        catch_all.iter().map(|i| OurWatInstruction(i.clone()));
+                        borrowed.iter().map(|i| OurWatInstruction(i.clone()));
                     quote! { Some(vec![#(#catch_all_instructions),*]) }
                 } else {
                     quote! { None }
@@ -3704,19 +3708,21 @@ fn translate_body_element(
 pub fn wasm(input: TokenStream) -> TokenStream {
     let global_scope = parse_macro_input!(input as GlobalScope);
 
-    let data = global_scope.module.data.into_iter().map(|(offset, data)| {
-        quote! {
-            module._add_data_raw(#offset, #data.to_string());
-        }
-    });
+    let data = global_scope
+        .module
+        .data
+        .clone()
+        .into_iter()
+        .map(|(offset, data)| {
+            quote! {
+                module._add_data_raw(#offset, #data.to_string());
+            }
+        });
 
     // TODO: this could be moved to WatModule ToTokens
     let types =
-        global_scope
-            .module
-            .types
-            .into_iter()
-            .map(|type_definition| match type_definition {
+        global_scope.module.types.clone().into_iter().map(
+            |type_definition| match type_definition {
                 TypeDefinition::Rec(types) => {
                     let types_q = types.iter().map(|(name, ty)| {
                         let ty = OurWasmType(ty.clone());
@@ -3735,11 +3741,13 @@ pub fn wasm(input: TokenStream) -> TokenStream {
                         module.add_type(#name.to_string(), #ty);
                     }
                 }
-            });
+            },
+        );
 
     let tags = global_scope
         .module
         .tags
+        .clone()
         .into_iter()
         .map(|(name, type_name)| {
             quote! {
@@ -3747,16 +3755,13 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             }
         });
 
-    let exports =
-        global_scope
-            .module
-            .exports
-            .into_iter()
-            .map(|(export_name, export_type, internal_name)| {
-                quote! {
-                    module.add_export(#export_name, #export_type, #internal_name);
-                }
-            });
+    let exports = global_scope.module.exports.clone().into_iter().map(
+        |(export_name, export_type, internal_name)| {
+            quote! {
+                module.add_export(#export_name, #export_type, #internal_name);
+            }
+        },
+    );
 
     let imports = global_scope
         .module
@@ -3773,6 +3778,7 @@ pub fn wasm(input: TokenStream) -> TokenStream {
     let globals = global_scope
         .module
         .globals
+        .clone()
         .into_iter()
         .map(|(name, global)| {
             let ty = OurWasmType(global.ty);
@@ -3783,22 +3789,25 @@ pub fn wasm(input: TokenStream) -> TokenStream {
             }
         });
 
-    let memories = global_scope
-        .module
-        .memories
-        .into_iter()
-        .map(|(label, (size, max_size_opt))| {
-            let max_size_q = match max_size_opt {
-                Some(max_size) => quote! { Some(#max_size) },
-                None => quote! { None },
-            };
-            quote! {
-                module.add_memory(#label, #size, #max_size_q);
-            }
-        });
+    let memories =
+        global_scope
+            .module
+            .memories
+            .clone()
+            .into_iter()
+            .map(|(label, (size, max_size_opt))| {
+                let max_size_q = match max_size_opt {
+                    Some(max_size) => quote! { Some(#max_size) },
+                    None => quote! { None },
+                };
+                quote! {
+                    module.add_memory(#label, #size, #max_size_q);
+                }
+            });
     let functions = global_scope
         .module
-        .functions
+        .functions()
+        .clone()
         .into_iter()
         .map(|f| {
             // Filter out import functions
