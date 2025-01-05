@@ -94,6 +94,10 @@ impl WasmType {
         Self::Ref(name.into(), Nullable::False)
     }
 
+    pub fn ref_null(name: impl Into<String>) -> Self {
+        Self::Ref(name.into(), Nullable::True)
+    }
+
     pub fn compatible_numeric_types(left: &Self, right: &Self) -> bool {
         use WasmType::*;
         matches!(
@@ -1183,9 +1187,10 @@ impl WatModule {
         self.function_keys.clone()
     }
 
-    pub fn add_function(&mut self, function: WatFunction) {
+    pub fn add_function(&mut self, function: WatFunction) -> FunctionKey {
         let key = self.functions.insert(function);
         self.function_keys.push(key);
+        key
     }
 
     pub fn functions_mut(&mut self) -> Vec<&mut WatFunction> {
