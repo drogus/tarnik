@@ -481,8 +481,6 @@ pub enum WatInstruction {
         catches: Vec<(String, InstructionsListWrapped)>,
         catch_all: Option<InstructionsListWrapped>,
     },
-    Catch(String, InstructionsListWrapped),
-    CatchAll(InstructionsListWrapped),
     RefEq,
 }
 
@@ -663,10 +661,6 @@ impl WatInstruction {
         }
     }
 
-    pub fn catch(label: impl Into<String>, instr: InstructionsList) -> Self {
-        Self::Catch(label.into(), Rc::new(RefCell::new(instr)))
-    }
-
     pub fn is_return(&self) -> bool {
         matches!(self, Self::Return)
     }
@@ -685,12 +679,18 @@ impl WatInstruction {
     }
 
     pub fn is_block_type(&self) -> bool {
-        matches!(self, Self::Block { .. })
+        self.is_block()
+            || self.is_loop()
             || matches!(self, Self::Try { .. })
-            || matches!(self, Self::Catch { .. })
-            || matches!(self, Self::CatchAll { .. })
             || matches!(self, Self::If { .. })
-            || matches!(self, Self::Loop { .. })
+    }
+
+    pub fn is_block(&self) -> bool {
+        matches!(self, Self::Block { .. })
+    }
+
+    pub fn is_loop(&self) -> bool {
+        matches!(self, Self::Loop { .. })
     }
 }
 
@@ -932,25 +932,6 @@ impl fmt::Display for WatInstruction {
                     .unwrap_or("".to_string());
 
                 writeln!(f, "try\n{try_block_str}{catches_str}{catch_all_str}end")
-            }
-            WatInstruction::Catch(label, instr) => {
-                let instr_str = instr
-                    .borrow()
-                    .iter()
-                    .map(|i| i.to_string())
-                    .collect::<Vec<String>>()
-                    .join("");
-                writeln!(f, "\ncatch {label}\n{instr_str}")
-            }
-
-            WatInstruction::CatchAll(instr) => {
-                let instr_str = instr
-                    .borrow()
-                    .iter()
-                    .map(|i| i.to_string())
-                    .collect::<Vec<String>>()
-                    .join("");
-                writeln!(f, "\ncatch_all\n{instr_str}")
             }
             WatInstruction::I64ExtendI32S => writeln!(f, "(i64.extend_i32_s)"),
             WatInstruction::I32WrapI64 => writeln!(f, "(i32.wrap_i64)"),

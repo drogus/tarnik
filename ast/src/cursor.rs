@@ -451,8 +451,6 @@ impl<'a> InstructionsCursor<'a> {
             // TODO: we need to check how many arguments does the exception type need
             WatInstruction::Throw(_) => (1, 0),
             WatInstruction::Try { .. } => (0, 0),
-            WatInstruction::Catch(_, _) => (0, 0),
-            WatInstruction::CatchAll(_) => (0, 0),
             WatInstruction::RefEq => (2, 1),
         }
     }
@@ -537,12 +535,6 @@ impl<'a> InstructionsCursor<'a> {
                     if let Some(c) = catch_all {
                         arms.push_back(c);
                     }
-                }
-                WatInstruction::Catch(_, instructions) => {
-                    arms.push_back(instructions);
-                }
-                WatInstruction::CatchAll(instructions) => {
-                    arms.push_back(instructions);
                 }
                 _ => {}
             }
@@ -673,6 +665,7 @@ impl<'a> InstructionsCursor<'a> {
 
     pub fn reset(&mut self) {
         self.set_position(0);
+        self.stack.last_mut().unwrap().started = false;
     }
 
     pub fn set_position(&mut self, position: usize) {
@@ -1209,12 +1202,6 @@ impl InstructionsCursor<'_> {
                 } => {
                     let try_state = self.analyze_stack_state(&try_block.borrow());
                     if let Some(ty) = try_state.peek() {
-                        state.push(ty.clone());
-                    }
-                }
-                WatInstruction::Catch(_, instructions) | WatInstruction::CatchAll(instructions) => {
-                    let catch_state = self.analyze_stack_state(&instructions.borrow());
-                    if let Some(ty) = catch_state.peek() {
                         state.push(ty.clone());
                     }
                 }

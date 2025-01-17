@@ -1399,8 +1399,6 @@ fn get_type(
         WatInstruction::RefI31 => Some(WasmType::I31Ref),
         WatInstruction::Throw(_) => todo!("get_type: WatInstruction::Throw(_) "),
         WatInstruction::Try { .. } => todo!("get_type: WatInstruction::Try "),
-        WatInstruction::Catch(_, _) => todo!("get_type: WatInstruction::Catch(_, "),
-        WatInstruction::CatchAll(_) => todo!("get_type: WatInstruction::CatchAll(_) "),
         WatInstruction::I32Add => Some(WasmType::I32),
         WatInstruction::I64Add => Some(WasmType::I64),
         WatInstruction::F32Add => Some(WasmType::F32),
@@ -3100,12 +3098,6 @@ impl ToTokens for OurWatInstruction {
                         #catch_all_tokens,
                     )
                 }
-            }
-            Catch(_, _) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::Catch(_, ")
-            }
-            CatchAll(_) => {
-                todo!("impl ToTokens for OurWatInstruction: WatInstruction::CatchAll(_) ")
             }
             I32Add => quote! { #w::I32Add },
             I64Add => quote! { #w::I64Add },
