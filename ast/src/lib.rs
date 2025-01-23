@@ -813,7 +813,7 @@ impl fmt::Display for WatInstruction {
             WatInstruction::I64Load32S(label) => memory_op(f, "i64.load32_s", label),
             WatInstruction::I64Load32U(label) => memory_op(f, "i64.load32_u", label),
 
-            WatInstruction::Nop => Ok(()),
+            WatInstruction::Nop => writeln!(f, "nop"),
             WatInstruction::Local { name, ty } => writeln!(f, "local {} {}", name, ty),
             WatInstruction::GlobalGet(name) => writeln!(f, "global.get {}", name),
             WatInstruction::GlobalSet(name) => writeln!(f, "global.set {}", name),
@@ -1023,7 +1023,7 @@ fn indent_str(s: String) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WatFunction {
     pub name: String,
     pub params: Vec<(Option<String>, WasmType)>,
@@ -1031,6 +1031,16 @@ pub struct WatFunction {
     pub locals: IndexMap<String, WasmType>,
     pub locals_counters: HashMap<String, u32>,
     pub body: InstructionsListWrapped,
+}
+
+impl PartialEq for WatFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.params == other.params
+            && self.results == other.results
+            && self.locals == other.locals
+            && self.body == other.body
+    }
 }
 
 impl WatFunction {

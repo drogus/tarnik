@@ -184,7 +184,7 @@ impl<'a> InstructionsCursor<'a> {
                 instructions.splice(position + 1..position + 1, remaining.iter().cloned());
             }
 
-            self.advance_position(new_instructions.len());
+            self.advance_position(new_instructions.len() - 1);
 
             Some(old)
         } else {
@@ -214,6 +214,10 @@ impl<'a> InstructionsCursor<'a> {
 
     pub fn current_instructions_len(&self) -> usize {
         self.stack.last().unwrap().instructions.borrow().len()
+    }
+
+    pub fn is_last(&self) -> bool {
+        self.current_position() == self.current_instructions_len() - 1
     }
 
     pub fn previous(&mut self) -> Option<WatInstruction> {
@@ -593,6 +597,7 @@ impl<'a> InstructionsCursor<'a> {
         let mut all_removed = Vec::new();
         let mut saved_stack = Vec::new();
 
+        let pos = self.current_position();
         // Replace current block first
         let removed = self.replace_till_the_end_of_the_block(new_instructions)?;
         all_removed.extend(removed);
