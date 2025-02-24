@@ -10,3 +10,9 @@ description = "A WASM AST implementation in Rust"
 indexmap.workspace = true
 anyhow = "1"
 slotmap = "1"
+similar.workspace = true 
+wast.workspace = true
+
+[dev-dependencies]
+similar.workspace = true
+wast.workspace = true
