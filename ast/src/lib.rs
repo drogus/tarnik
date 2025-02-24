@@ -1473,12 +1473,12 @@ impl fmt::Display for WatModule {
     }
 }
 
-fn memory_op(f: &mut Formatter<'_>, instr: &str, _label: &Option<String>) -> fmt::Result {
-    // if let Some(label) = label {
-    //     write!(f, "({instr} (memory {label})")
-    // } else {
-    writeln!(f, "{instr}")
-    // }
+fn memory_op(f: &mut Formatter<'_>, instr: &str, label: &Option<String>) -> fmt::Result {
+    if let Some(label) = label {
+        write!(f, "{instr} {label}")
+    } else {
+        writeln!(f, "{instr}")
+    }
 }
 
 #[cfg(test)]
