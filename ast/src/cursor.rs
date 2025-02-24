@@ -1223,72 +1223,57 @@ impl InstructionsCursor<'_> {
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::WasmType;
     use std::{cell::RefCell, rc::Rc};
+
+    use super::*;
+    use crate::{test_helpers::*, wat_converter::parse_wat_function};
 
     #[test]
     fn test_replace_till_end_of_function() {
-        let mut module = create_test_module();
+        let mut module = WatModule::new();
 
-        // Create nested if structure
-        let inner_if_else = Rc::new(RefCell::new(vec![
-            WatInstruction::I32Const(100),
-            WatInstruction::Call("$log".to_string()),
-        ]));
+        // Input function in WAT format
+        let input_wat = r#"
+            (func $bar
+                i32.const 1
+                if
+                    i32.const 1
+                    if
+                        i32.const 10
+                        call $log
+                        i32.const 44
+                        i32.const 22
+                        i32.add
+                        call $log
+                    else
+                        i32.const 100
+                        call $log
+                    end
+                    i32.const 10
+                    call $foo
+                else
+                    i32.const 666
+                    call $log
+                end
+                i32.const 50
+                call $bar
+            )"#;
 
-        let inner_if_then = Rc::new(RefCell::new(vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::Call("$log".to_string()),
-            WatInstruction::I32Const(44),
-            WatInstruction::I32Const(22),
-            WatInstruction::I32Add,
-            WatInstruction::Call("$log".to_string()),
-        ]));
-
-        let outer_if_then = Rc::new(RefCell::new(vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::If {
-                then: inner_if_then,
-                r#else: Some(inner_if_else),
-            },
-            WatInstruction::I32Const(10),
-            WatInstruction::Call("$foo".to_string()),
-        ]));
-
-        let outer_if_else = Rc::new(RefCell::new(vec![
-            WatInstruction::I32Const(666),
-            WatInstruction::Call("$log".to_string()),
-        ]));
-
-        let instructions = vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::If {
-                then: outer_if_then,
-                r#else: Some(outer_if_else),
-            },
-            WatInstruction::I32Const(50),
-            WatInstruction::Call("$bar".to_string()),
-        ];
-
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
         cursor.set_current_function("bar").unwrap();
 
-        // Navigate to the log call in the inner if
-        cursor.next();
-        cursor.next(); // get to the first block
-        let mut iterator = cursor.enter_block().unwrap(); // Enter outer if
+        // Navigate to i32.const 44 in the inner if
+        cursor.next(); // i32.const 1
+        cursor.next(); // if
+        let mut iterator = cursor.enter_block().unwrap();
         iterator.next(&mut cursor);
-        cursor.next();
-        cursor.next();
-        let mut iterator = cursor.enter_block().unwrap(); // Enter inner if
+        cursor.next(); // i32.const 1
+        cursor.next(); // if
+        let mut iterator = cursor.enter_block().unwrap();
         iterator.next(&mut cursor);
         cursor.next(); // i32.const 10
         cursor.next(); // call $log
@@ -1299,85 +1284,56 @@ mod tests {
             WatInstruction::I32Const(777),
             WatInstruction::Call("$appended".to_string()),
         ]);
-        let removed = cursor
+
+        cursor
             .replace_till_the_end_of_function(replacement, append_instructions)
             .unwrap();
 
-        // Verify removed instructions
-        assert_eq!(
-            removed,
-            vec![
-                WatInstruction::I32Const(44),
-                WatInstruction::I32Const(22),
-                WatInstruction::I32Add,
-                WatInstruction::Call("$log".to_string()),
-                WatInstruction::I32Const(10),
-                WatInstruction::Call("$foo".to_string()),
-                WatInstruction::I32Const(50),
-                WatInstruction::Call("$bar".to_string()),
-            ]
-        );
+        // Expected function after transformation
+        let expected_wat = r#"
+            (func $bar
+                i32.const 1
+                if
+                  i32.const 1
+                  if
+                    i32.const 10
+                    call $log
+                    call $the_replacement
+                  else
+                    i32.const 100
+                    call $log
+                  end
+                else
+                  i32.const 666
+                  call $log
+                end
+                i32.const 777
+                call $appended
+            )"#;
 
-        // Verify the cursor is still in the inner if block
-        assert_eq!(cursor.stack.len(), 3); // Function + outer if + inner if
-        assert_eq!(
-            cursor.current_instruction(),
-            Some(WatInstruction::Call("$the_replacement".to_string()))
-        );
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("bar").unwrap();
 
-        // Verify the overall structure is correct
-        let function = module.get_function("bar").unwrap();
-        let final_instructions = function.body.borrow();
-        assert_eq!(final_instructions[0], WatInstruction::I32Const(1));
-        assert_eq!(
-            final_instructions[1],
-            WatInstruction::If {
-                then: Rc::new(RefCell::new(vec![
-                    WatInstruction::I32Const(1),
-                    WatInstruction::If {
-                        then: Rc::new(RefCell::new(vec![
-                            WatInstruction::I32Const(10),
-                            WatInstruction::Call("$log".to_string()),
-                            WatInstruction::Call("$the_replacement".to_string()),
-                        ])),
-                        r#else: Some(Rc::new(RefCell::new(vec![
-                            WatInstruction::I32Const(100),
-                            WatInstruction::Call("$log".to_string())
-                        ])))
-                    },
-                ])),
-                r#else: Some(Rc::new(RefCell::new(vec![
-                    WatInstruction::I32Const(666),
-                    WatInstruction::Call("$log".to_string())
-                ])))
-            }
-        );
-
-        // Verify appended instructions
-        assert_eq!(final_instructions[2], WatInstruction::I32Const(777));
-        assert_eq!(
-            final_instructions[3],
-            WatInstruction::Call("$appended".to_string())
-        );
+        assert_functions_eq(&expected, actual);
     }
 
     #[test]
     fn test_stack_analysis_until_current() {
-        let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::I32Const(20),
-            WatInstruction::I32Add,
-            WatInstruction::I64Const(30),
-        ];
+        let mut module = WatModule::new();
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                i32.const 10
+                i32.const 20
+                i32.add
+                i64.const 30
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         // Test initial position (first instruction)
         cursor.next().unwrap();
@@ -1406,48 +1362,49 @@ mod tests {
 
     #[test]
     fn test_stack_analysis() {
-        let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::I32Const(20),
-            WatInstruction::I32Add,
-            WatInstruction::I64Const(30),
-        ];
+        let mut module = WatModule::new();
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                i32.const 10
+                i32.const 20
+                i32.add
+                i64.const 30
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         let state = cursor.analyze_stack_state(&cursor.current_instructions_list().borrow());
-        assert_eq!(state.len(), 2); // Should have two values
+        assert_eq!(state.len(), 2);
 
         let types: Vec<_> = state.types.iter().collect();
-        assert_eq!(types[0], &WasmType::I32); // Result of add
-        assert_eq!(types[1], &WasmType::I64); // Last constant
+        assert_eq!(types[0], &WasmType::I32);
+        assert_eq!(types[1], &WasmType::I64);
     }
 
     #[test]
     fn test_stack_analysis_with_locals() {
-        let mut module = create_test_module();
-        let mut function = module.get_function_mut("bar").unwrap();
-        function.add_local_exact("x", WasmType::I32);
+        let mut module = WatModule::new();
 
-        let instructions = vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::LocalSet("$x".to_string()),
-            WatInstruction::LocalGet("$x".to_string()),
-            WatInstruction::I32Const(20),
-            WatInstruction::I32Add,
-        ];
+        let input_wat = r#"
+            (func $test
+                (local $x i32)
+                i32.const 10
+                local.set $x
+                local.get $x
+                i32.const 20
+                i32.add
+            )"#;
 
-        function.set_body(instructions);
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         let state = cursor.analyze_stack_state(&cursor.current_instructions_list().borrow());
         assert_eq!(state.len(), 1);
@@ -1472,18 +1429,19 @@ mod tests {
     #[test]
     fn test_cursor_navigation() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-        ];
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+
+        let input_wat = r#"
+            (func $test
+                i32.const 1
+                i32.const 2
+                i32.add
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").ok();
+        cursor.set_current_function("test").ok();
 
         assert_eq!(cursor.next(), Some(WatInstruction::I32Const(1)));
         assert_eq!(cursor.next(), Some(WatInstruction::I32Const(2)));
@@ -1496,23 +1454,20 @@ mod tests {
     #[test]
     fn test_block_navigation() {
         let mut module = create_test_module();
-        let block_instructions = Rc::new(RefCell::new(vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-        ]));
-        let instructions = vec![WatInstruction::Block {
-            label: "test".to_string(),
-            signature: Default::default(),
-            instructions: block_instructions,
-        }];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                block $test
+                    i32.const 1
+                    i32.const 2
+                end
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         let mut iterator = cursor.enter_block().unwrap();
         iterator.next(&mut cursor);
@@ -1524,21 +1479,22 @@ mod tests {
     #[test]
     fn test_function_arguments() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-            WatInstruction::Call("$foo".to_string()),
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test (param $a i32) (param $b i32)
+                i32.const 10
+                i32.const 1
+                i32.const 2
+                i32.add
+                call $foo
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
+
         while cursor.next() != Some(WatInstruction::Call("$foo".to_string())) {}
 
         let parts = cursor.get_call_arguments().unwrap();
@@ -1556,23 +1512,25 @@ mod tests {
     #[test]
     fn test_function_arguments_with_set_get() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(10),
-            WatInstruction::I32Const(1),
-            WatInstruction::LocalSet("$var".to_string()),
-            WatInstruction::LocalGet("$var".to_string()),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-            WatInstruction::Call("$foo".to_string()),
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test (param $a i32) (param $b i32)
+                (local $var i32)
+                i32.const 10
+                i32.const 1
+                local.set $var
+                local.get $var
+                i32.const 2
+                i32.add
+                call $foo
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
+
         while cursor.next() != Some(WatInstruction::Call("$foo".to_string())) {}
 
         let parts = cursor.get_call_arguments().unwrap();
@@ -1592,28 +1550,22 @@ mod tests {
     #[test]
     fn test_nested_blocks() {
         let mut module = create_test_module();
-        let inner_block = Rc::new(RefCell::new(vec![WatInstruction::I32Const(1)]));
-        let outer_block = Rc::new(RefCell::new(vec![
-            WatInstruction::Block {
-                label: "inner".to_string(),
-                signature: Default::default(),
-                instructions: inner_block,
-            },
-            WatInstruction::I32Const(2),
-        ]));
-        let instructions = vec![WatInstruction::Block {
-            label: "outer".to_string(),
-            signature: Default::default(),
-            instructions: outer_block,
-        }];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                block $outer
+                    block $inner
+                        i32.const 1
+                    end
+                    i32.const 2
+                end
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         let mut iterator = cursor.enter_block().unwrap();
         iterator.next(&mut cursor);
@@ -1631,20 +1583,21 @@ mod tests {
     #[test]
     fn test_if_block() {
         let mut module = create_test_module();
-        let then_block = Rc::new(RefCell::new(vec![WatInstruction::I32Const(1)]));
-        let else_block = Rc::new(RefCell::new(vec![WatInstruction::I32Const(2)]));
-        let instructions = vec![WatInstruction::If {
-            then: then_block,
-            r#else: Some(else_block),
-        }];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                if
+                    i32.const 1
+                else
+                    i32.const 2
+                end
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         let mut iterator = cursor.enter_block().unwrap();
         iterator.next(&mut cursor);
@@ -1664,23 +1617,23 @@ mod tests {
     #[test]
     fn test_replace_current_call_with_arguments() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(999),
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-            WatInstruction::I32Const(10),
-            WatInstruction::Call("$foo".to_string()),
-            WatInstruction::I32Const(888),
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                i32.const 999
+                i32.const 1
+                i32.const 2
+                i32.add
+                i32.const 10
+                call $foo
+                i32.const 888
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
         while cursor.next() != Some(WatInstruction::Call("$foo".to_string())) {}
 
         let new_instructions = vec![WatInstruction::I32Const(42), WatInstruction::I32Const(43)];
@@ -1701,88 +1654,107 @@ mod tests {
         );
 
         // Check that the instructions were replaced correctly
-        let function = module.get_function("bar").unwrap();
-        let instructions = function.body.borrow();
-        assert_eq!(instructions[0], WatInstruction::I32Const(999));
-        assert_eq!(instructions[1], WatInstruction::I32Const(42));
-        assert_eq!(instructions[2], WatInstruction::I32Const(43));
-        assert_eq!(instructions[3], WatInstruction::I32Const(888));
+        let expected_wat = r#"
+            (func $test
+                i32.const 999
+                i32.const 42
+                i32.const 43
+                i32.const 888
+            )"#;
+
+        let expected_func = parse_wat_function(expected_wat);
+        let actual_func = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected_func, actual_func);
     }
 
     #[test]
     fn test_replace_current() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::LocalGet("x".to_string()),
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Add,
-            WatInstruction::LocalGet("y".to_string()),
-            WatInstruction::I32Mul,
-            WatInstruction::Call("foo".to_string()),
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                local.get $x
+                i32.const 1
+                i32.add
+                local.get $y
+                i32.mul
+                call $foo
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         {
             let mut cursor = InstructionsCursor::new(&mut module);
-            cursor.set_current_function("bar").unwrap();
-            while cursor.next() != Some(WatInstruction::LocalGet("y".to_string())) {}
+            cursor.set_current_function("test").unwrap();
+            while cursor.next() != Some(WatInstruction::LocalGet("$y".to_string())) {}
 
             cursor.replace_current(vec![
-                WatInstruction::LocalGet("y".to_string()),
+                WatInstruction::LocalGet("$y".to_string()),
                 WatInstruction::I32Const(1),
                 WatInstruction::I32Add,
             ]);
         }
 
-        let function = module.get_function("bar").unwrap();
-        let instructions = function.body.borrow();
-        assert_eq!(instructions[0], WatInstruction::LocalGet("x".to_string()));
-        assert_eq!(instructions[1], WatInstruction::I32Const(1));
-        assert_eq!(instructions[2], WatInstruction::I32Add);
-        assert_eq!(instructions[3], WatInstruction::LocalGet("y".to_string()));
-        assert_eq!(instructions[4], WatInstruction::I32Const(1));
-        assert_eq!(instructions[5], WatInstruction::I32Add);
-        assert_eq!(instructions[6], WatInstruction::I32Mul);
+        let expected_wat = r#"
+            (func $test
+                local.get $x
+                i32.const 1
+                i32.add
+                local.get $y
+                i32.const 1
+                i32.add
+                i32.mul
+                call $foo
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
     }
 
     #[test]
     fn test_insert_after_current() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::LocalGet("x".to_string()),
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Add,
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                local.get $x
+                i32.const 1
+                i32.add
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         {
             let mut cursor = InstructionsCursor::new(&mut module);
-            cursor.set_current_function("bar").unwrap();
-            // Move to I32Const(1)
+            cursor.set_current_function("test").unwrap();
+            // Move to i32.const 1
             cursor.next();
             cursor.next();
 
             cursor.insert_after_current(vec![
-                WatInstruction::LocalGet("y".to_string()),
+                WatInstruction::LocalGet("$y".to_string()),
                 WatInstruction::I32Mul,
             ]);
         }
 
-        let function = module.get_function("bar").unwrap();
-        let instructions = function.body.borrow();
-        assert_eq!(instructions[0], WatInstruction::LocalGet("x".to_string()));
-        assert_eq!(instructions[1], WatInstruction::I32Const(1));
-        assert_eq!(instructions[2], WatInstruction::LocalGet("y".to_string()));
-        assert_eq!(instructions[3], WatInstruction::I32Mul);
-        assert_eq!(instructions[4], WatInstruction::I32Add);
+        let expected_wat = r#"
+            (func $test
+                local.get $x
+                i32.const 1
+                local.get $y
+                i32.mul
+                i32.add
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
     }
 
     #[test]
@@ -1843,21 +1815,21 @@ mod tests {
     #[test]
     fn test_replace_range() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-            WatInstruction::I32Const(3),
-            WatInstruction::I32Mul,
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                i32.const 1
+                i32.const 2
+                i32.add
+                i32.const 3
+                i32.mul
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
+        cursor.set_current_function("test").unwrap();
 
         // Replace instructions from index 1 to 3 (inclusive)
         let old_instructions = cursor
@@ -1874,13 +1846,18 @@ mod tests {
         assert_eq!(old_instructions[1], WatInstruction::I32Add);
         assert_eq!(old_instructions[2], WatInstruction::I32Const(3));
 
-        // Verify the new instruction sequence
-        let function = module.get_function("bar").unwrap();
-        let final_instructions = function.body.borrow();
-        assert_eq!(final_instructions[0], WatInstruction::I32Const(1));
-        assert_eq!(final_instructions[1], WatInstruction::I32Const(42));
-        assert_eq!(final_instructions[2], WatInstruction::Drop);
-        assert_eq!(final_instructions[3], WatInstruction::I32Mul);
+        let expected_wat = r#"
+            (func $test
+                i32.const 1
+                i32.const 42
+                drop
+                i32.mul
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
     }
 
     #[test]
@@ -1915,23 +1892,23 @@ mod tests {
     #[test]
     fn test_replace_till_the_end_of_block() {
         let mut module = create_test_module();
-        let instructions = vec![
-            WatInstruction::I32Const(1),
-            WatInstruction::I32Const(2),
-            WatInstruction::I32Add,
-            WatInstruction::I32Const(3),
-            WatInstruction::I32Mul,
-        ];
 
-        module
-            .get_function_mut("bar")
-            .unwrap()
-            .set_body(instructions);
+        let input_wat = r#"
+            (func $test
+                i32.const 1
+                i32.const 2
+                i32.add
+                i32.const 3
+                i32.mul
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
 
         let mut cursor = InstructionsCursor::new(&mut module);
-        cursor.set_current_function("bar").unwrap();
-        cursor.next(); // Move to I32Const(1)
-        cursor.next(); // Move to I32Const(2)
+        cursor.set_current_function("test").unwrap();
+        cursor.next(); // Move to i32.const 1
+        cursor.next(); // Move to i32.const 2
 
         let new_instructions = vec![WatInstruction::I32Const(42), WatInstruction::I32Const(43)];
 
@@ -1946,11 +1923,16 @@ mod tests {
         assert_eq!(old_instructions[2], WatInstruction::I32Const(3));
         assert_eq!(old_instructions[3], WatInstruction::I32Mul);
 
-        // Verify the new instruction sequence
-        let function = module.get_function("bar").unwrap();
-        let final_instructions = function.body.borrow();
-        assert_eq!(final_instructions[0], WatInstruction::I32Const(1));
-        assert_eq!(final_instructions[1], WatInstruction::I32Const(42));
-        assert_eq!(final_instructions[2], WatInstruction::I32Const(43));
+        let expected_wat = r#"
+            (func $test
+                i32.const 1
+                i32.const 42
+                i32.const 43
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
     }
 }

@@ -1119,6 +1119,11 @@ impl WatFunction {
 }
 
 pub mod cursor;
+pub mod wat_converter;
+pub mod test_helpers;
+
+#[cfg(test)]
+use test_helpers::*;
 
 impl fmt::Display for WatFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

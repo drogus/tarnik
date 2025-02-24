@@ -13,3 +13,5 @@ license-file = "LICENSE.md"
 [workspace.dependencies]
 indexmap = "2.6"
 tarnik-ast = { path = "ast", version = "0.1.0" }
+similar = "2.7.0"
+wast = "224.0"
