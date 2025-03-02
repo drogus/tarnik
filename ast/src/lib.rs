@@ -693,6 +693,10 @@ impl WatInstruction {
         matches!(self, Self::Loop { .. })
     }
 
+    pub fn is_try_catch(&self) -> bool {
+        matches!(self, Self::Try { .. })
+    }
+
     pub fn block_label(&self) -> Option<String> {
         match self {
             WatInstruction::Block { label, .. } => Some(label.clone()),
@@ -707,6 +711,21 @@ impl WatInstruction {
             WatInstruction::Loop { label, .. } => Some(label.clone()),
             _ => None,
         }
+    }
+}
+
+pub struct VecDebug(pub Vec<WatInstruction>);
+impl fmt::Display for VecDebug {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0
+                .iter()
+                .map(|instr| instr.to_string())
+                .collect::<Vec<String>>()
+                .join("\n")
+        )
     }
 }
 
@@ -858,7 +877,7 @@ impl fmt::Display for WatInstruction {
             } => {
                 writeln!(f, "block {label}")?;
                 for instruction in instructions.borrow().iter() {
-                    writeln!(f, "{}", indent_instruction(instruction))?;
+                    write!(f, "{}", indent_instruction(instruction))?;
                 }
                 writeln!(f, "end")
             }
@@ -1119,8 +1138,8 @@ impl WatFunction {
 }
 
 pub mod cursor;
-pub mod wat_converter;
 pub mod test_helpers;
+pub mod wat_converter;
 
 #[cfg(test)]
 use test_helpers::*;

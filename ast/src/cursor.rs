@@ -1,34 +1,56 @@
 use crate::{
-    FunctionKey, InstructionsList, InstructionsListWrapped, TypeDefinition, WasmType, WatFunction,
-    WatInstruction, WatModule,
+    FunctionKey, InstructionsList, InstructionsListWrapped, TypeDefinition, VecDebug, WasmType,
+    WatFunction, WatInstruction, WatModule,
 };
+use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 struct StackElement {
     instructions: InstructionsListWrapped,
     position: usize,
     started: bool,
+    block_arm: Option<BlockArm>,
 }
 
 impl StackElement {
-    pub fn new(instructions: InstructionsListWrapped) -> Self {
+    pub fn new(instructions: InstructionsListWrapped, block_arm: Option<BlockArm>) -> Self {
         Self {
             instructions,
             position: 0,
             started: false,
+            block_arm,
         }
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockArmType {
+    Try,
+    Catch(String),
+    CatchAll,
+    If,
+    Else,
+    Block,
+    Loop,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockArm {
+    pub instructions: InstructionsListWrapped,
+    pub arm_type: BlockArmType,
+    pub parent_instruction: Option<WatInstruction>,
+}
+
 #[derive(Debug)]
 pub struct BlockArmsIterator {
-    arms: VecDeque<InstructionsListWrapped>,
+    arms: VecDeque<BlockArm>,
     started: bool,
 }
 
 impl BlockArmsIterator {
-    fn new(arms: VecDeque<InstructionsListWrapped>) -> Self {
+    fn new(arms: VecDeque<BlockArm>) -> Self {
         Self {
             arms,
             started: false,
@@ -36,14 +58,18 @@ impl BlockArmsIterator {
     }
 
     pub fn next(&mut self, cursor: &mut InstructionsCursor) -> bool {
-        if let Some(instructions) = self.arms.pop_front() {
+        if let Some(arm) = self.arms.pop_front() {
             if self.started {
                 // Replace the current stack element
                 cursor.stack.pop();
-                cursor.stack.push(StackElement::new(instructions));
+                cursor
+                    .stack
+                    .push(StackElement::new(arm.instructions.clone(), Some(arm)));
             } else {
                 // First time through, just push
-                cursor.stack.push(StackElement::new(instructions));
+                cursor
+                    .stack
+                    .push(StackElement::new(arm.instructions.clone(), Some(arm)));
                 self.started = true;
             }
             true
@@ -104,6 +130,10 @@ impl<'a> InstructionsCursor<'a> {
         self.get_function_by_key_unchecked(self.current_function.unwrap())
     }
 
+    pub fn current_function_key(&self) -> FunctionKey {
+        self.current_function.unwrap()
+    }
+
     pub fn current_function_mut(&mut self) -> &mut WatFunction {
         self.get_function_by_key_unchecked_mut(self.current_function.unwrap())
     }
@@ -140,7 +170,8 @@ impl<'a> InstructionsCursor<'a> {
         let function = self.module.get_function_by_key_unchecked(key);
         self.current_function = Some(key);
         self.stack = vec![];
-        self.stack.push(StackElement::new(function.body.clone()));
+        self.stack
+            .push(StackElement::new(function.body.clone(), None));
 
         Ok(())
     }
@@ -193,13 +224,15 @@ impl<'a> InstructionsCursor<'a> {
     }
 
     pub fn insert_after_current(&mut self, new_instructions: Vec<WatInstruction>) {
-        let position = self.current_position();
+        let mut position = self.current_position();
         let instructions_list = self.current_instructions_list();
         let mut instructions = instructions_list.borrow_mut();
-        if position < instructions.len() {
-            // Insert all new instructions after the current position
-            instructions.splice(position + 1..position + 1, new_instructions.iter().cloned());
+        if position >= instructions.len() {
+            position = instructions.len() - 1;
+            self.set_position(position);
         }
+        // Insert all new instructions after the current position
+        instructions.splice(position + 1..position + 1, new_instructions.iter().cloned());
     }
 
     pub fn current_instruction(&self) -> Option<WatInstruction> {
@@ -515,18 +548,35 @@ impl<'a> InstructionsCursor<'a> {
     pub fn enter_block(&mut self) -> anyhow::Result<BlockArmsIterator> {
         if let Some(current) = self.current_instruction() {
             let mut arms = VecDeque::new();
+            let current_clone = current.clone();
 
             match current {
                 WatInstruction::Block { instructions, .. } => {
-                    arms.push_front(instructions);
+                    arms.push_back(BlockArm {
+                        instructions,
+                        arm_type: BlockArmType::Block,
+                        parent_instruction: Some(current_clone),
+                    });
                 }
                 WatInstruction::Loop { instructions, .. } => {
-                    arms.push_front(instructions);
+                    arms.push_back(BlockArm {
+                        instructions,
+                        arm_type: BlockArmType::Loop,
+                        parent_instruction: Some(current_clone),
+                    });
                 }
                 WatInstruction::If { then, r#else } => {
-                    arms.push_back(then);
+                    arms.push_back(BlockArm {
+                        instructions: then,
+                        arm_type: BlockArmType::If,
+                        parent_instruction: Some(current_clone.clone()),
+                    });
                     if let Some(e) = r#else {
-                        arms.push_back(e);
+                        arms.push_back(BlockArm {
+                            instructions: e,
+                            arm_type: BlockArmType::Else,
+                            parent_instruction: Some(current_clone),
+                        });
                     }
                 }
                 WatInstruction::Try {
@@ -534,10 +584,26 @@ impl<'a> InstructionsCursor<'a> {
                     catches,
                     catch_all,
                 } => {
-                    arms.push_front(try_block);
-                    arms.extend(catches.iter().map(|(_, instructions)| instructions.clone()));
+                    arms.push_back(BlockArm {
+                        instructions: try_block,
+                        arm_type: BlockArmType::Try,
+                        parent_instruction: Some(current_clone.clone()),
+                    });
+
+                    for (tag, instructions) in catches {
+                        arms.push_back(BlockArm {
+                            instructions,
+                            arm_type: BlockArmType::Catch(tag.clone()),
+                            parent_instruction: Some(current_clone.clone()),
+                        });
+                    }
+
                     if let Some(c) = catch_all {
-                        arms.push_back(c);
+                        arms.push_back(BlockArm {
+                            instructions: c,
+                            arm_type: BlockArmType::CatchAll,
+                            parent_instruction: Some(current_clone),
+                        });
                     }
                 }
                 _ => {}
@@ -589,6 +655,92 @@ impl<'a> InstructionsCursor<'a> {
         self.current_position() + 1 == self.current_instructions_list().borrow().len()
     }
 
+    // TODO: at the moment this assumes that there are no other block types than Try, which is
+    // true for Jawsm (as all the blocks and loops are replaced first), but it won't be true
+    // in general
+    pub fn get_parent_try_catch_blocks(
+        &mut self,
+        new_instructions: Vec<WatInstruction>,
+    ) -> Option<Vec<WatInstruction>> {
+        let mut current_instructions: Vec<WatInstruction> = Vec::new();
+        current_instructions.extend(new_instructions);
+
+        if let Some(stack_element) = self.stack.last() {
+            if let Some(block_arm) = &stack_element.block_arm {
+                if let BlockArmType::Try = block_arm.arm_type {
+                    match &block_arm.parent_instruction {
+                            Some(WatInstruction::Try { try_block: _, catches, catch_all }) => {
+                                return Some(vec![WatInstruction::Try { try_block: Rc::new(RefCell::new(current_instructions)), catches: catches.clone(), catch_all: catch_all.clone() }]);
+                                },
+                            _ => unreachable!("if BlockArmType is set to Try, the parent instruction should also be a try")
+                        };
+                }
+            }
+        }
+
+        Some(current_instructions)
+    }
+
+    pub fn fetch_till_the_end_of_function_try_catch_aware(
+        &mut self,
+        new_instructions: Option<Vec<WatInstruction>>,
+    ) -> Option<Vec<WatInstruction>> {
+        let mut saved_stack = Vec::new();
+
+        let pos = self.current_position();
+        // Replace current block first
+        let mut all_removed =
+            self.fetch_till_the_end_of_the_block_try_catch_aware(new_instructions, vec![])?;
+
+        // Save and exit blocks while processing
+        while !self.is_in_top_level_block() {
+            saved_stack.push(self.stack.last().unwrap().clone());
+            self.exit_block();
+
+            if !self.last_instruction() {
+                all_removed =
+                    self.fetch_till_the_end_of_the_block_try_catch_aware(None, all_removed)?;
+            }
+        }
+
+        // Restore the stack in reverse order
+        for el in saved_stack.into_iter().rev() {
+            self.stack.push(el);
+        }
+
+        Some(all_removed)
+    }
+
+    pub fn replace_till_the_end_of_function_try_catch_aware(
+        &mut self,
+        new_instructions: Vec<WatInstruction>,
+    ) -> Option<Vec<WatInstruction>> {
+        let mut saved_stack = Vec::new();
+
+        let pos = self.current_position();
+        // Replace current block first
+        let mut all_removed =
+            self.replace_till_the_end_of_the_block_try_catch_aware(new_instructions, vec![])?;
+
+        // Save and exit blocks while processing
+        while !self.is_in_top_level_block() {
+            saved_stack.push(self.stack.last().unwrap().clone());
+            self.exit_block();
+
+            if !self.last_instruction() {
+                all_removed =
+                    self.fetch_till_the_end_of_the_block_try_catch_aware(None, all_removed)?;
+            }
+        }
+
+        // Restore the stack in reverse order
+        for el in saved_stack.into_iter().rev() {
+            self.stack.push(el);
+        }
+
+        Some(all_removed)
+    }
+
     pub fn replace_till_the_end_of_function(
         &mut self,
         new_instructions: Vec<WatInstruction>,
@@ -597,7 +749,7 @@ impl<'a> InstructionsCursor<'a> {
         let mut all_removed = Vec::new();
         let mut saved_stack = Vec::new();
 
-        let pos = self.current_position();
+        let _pos = self.current_position();
         // Replace current block first
         let removed = self.replace_till_the_end_of_the_block(new_instructions)?;
         all_removed.extend(removed);
@@ -643,6 +795,92 @@ impl<'a> InstructionsCursor<'a> {
 
         drop(instructions); // Release the borrow before calling replace_range
         self.replace_range(current_pos, end_pos, new_instructions)
+    }
+
+    pub fn fetch_till_the_end_of_the_block_try_catch_aware(
+        &mut self,
+        new_instructions: Option<Vec<WatInstruction>>,
+        mut current_instructions: Vec<WatInstruction>,
+    ) -> Option<Vec<WatInstruction>> {
+        let current_pos = self.current_position() + 1;
+        let instructions_list = self.current_instructions_list();
+        let instructions = instructions_list.borrow();
+        let end_pos = if instructions.is_empty() {
+            0
+        } else {
+            instructions.len() - 1
+        };
+
+        drop(instructions); // Release the borrow before calling replace_range
+        let mut fetched_instructions =
+            new_instructions.or_else(|| self.fetch_range(current_pos, end_pos));
+
+        if let Some(mut instructions) = fetched_instructions {
+            current_instructions.extend(instructions);
+
+            if let Some(stack_element) = self.stack.last() {
+                if let Some(block_arm) = &stack_element.block_arm {
+                    if let BlockArmType::Try = block_arm.arm_type {
+                        match &block_arm.parent_instruction {
+                            Some(WatInstruction::Try { try_block: _, catches, catch_all }) => {
+                                return Some(vec![WatInstruction::Try { try_block: Rc::new(RefCell::new(current_instructions)), catches: catches.clone(), catch_all: catch_all.clone() }]);
+                                },
+                            _ => unreachable!("if BlockArmType is set to Try, the parent instruction should also be a try")
+                        };
+                    }
+                }
+            }
+        }
+
+        Some(current_instructions)
+    }
+
+    pub fn replace_till_the_end_of_the_block_try_catch_aware(
+        &mut self,
+        new_instructions: Vec<WatInstruction>,
+        mut current_instructions: Vec<WatInstruction>,
+    ) -> Option<Vec<WatInstruction>> {
+        let current_pos = self.current_position();
+        let instructions_list = self.current_instructions_list();
+        let instructions = instructions_list.borrow();
+        let end_pos = if instructions.is_empty() {
+            0
+        } else {
+            instructions.len() - 1
+        };
+
+        drop(instructions); // Release the borrow before calling replace_range
+        let mut removed_instructions = self.replace_range(current_pos, end_pos, new_instructions);
+
+        if let Some(mut removed) = removed_instructions {
+            current_instructions.extend(removed);
+
+            if let Some(stack_element) = self.stack.last() {
+                if let Some(block_arm) = &stack_element.block_arm {
+                    if let BlockArmType::Try = block_arm.arm_type {
+                        match &block_arm.parent_instruction {
+                            Some(WatInstruction::Try { try_block: _, catches, catch_all }) => {
+                                return Some(vec![WatInstruction::Try { try_block: Rc::new(RefCell::new(current_instructions)), catches: catches.clone(), catch_all: catch_all.clone() }]);
+                                },
+                            _ => unreachable!("if BlockArmType is set to Try, the parent instruction should also be a try")
+                        };
+                    }
+                }
+            }
+        }
+
+        Some(current_instructions)
+    }
+
+    pub fn fetch_range(&mut self, start: usize, end: usize) -> Option<Vec<WatInstruction>> {
+        let instructions_list = self.current_instructions_list();
+        let mut instructions = instructions_list.borrow_mut();
+        let len = instructions.len();
+        if start > end || end >= len {
+            return None;
+        }
+
+        Some(instructions[start..=end].iter().cloned().collect())
     }
 
     pub fn replace_range(
@@ -1147,11 +1385,7 @@ impl InstructionsCursor<'_> {
                         }
                     }
                 }
-                WatInstruction::Block {
-                    signature,
-                    instructions,
-                    ..
-                } => {
+                WatInstruction::Block { signature, .. } => {
                     // Handle block parameters and results
                     for _ in &signature.params {
                         state.pop();
@@ -1934,5 +2168,173 @@ mod tests {
         let actual = module.get_function("test").unwrap();
 
         assert_functions_eq(&expected, actual);
+    }
+
+    #[test]
+    fn test_replace_till_the_end_of_function_try_catch_aware_simple() {
+        let mut module = create_test_module();
+
+        let input_wat = r#"
+            (func $test
+                call $before-try-catch
+                try
+                    call $before-foo
+                    call $foo
+                    call $after-foo
+                catch $Error
+                    call $inside-catch
+                end
+                call $after-try-catch
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
+
+        let mut cursor = InstructionsCursor::new(&mut module);
+        cursor.set_current_function("test").unwrap();
+        cursor.next(); // call $before-try-catch
+        cursor.next(); // try
+        let mut iterator = cursor.enter_block().unwrap();
+        iterator.next(&mut cursor);
+        cursor.next(); // call $before-foo
+        cursor.next(); // call $foo
+
+        assert_eq!(
+            cursor.current_instruction(),
+            Some(WatInstruction::call("$foo"))
+        );
+
+        let old_instructions = cursor
+            .replace_till_the_end_of_function_try_catch_aware(vec![WatInstruction::call(
+                "$new-call",
+            )])
+            .unwrap();
+
+        let expected_wat = r#"
+            (func $test
+                call $before-try-catch
+                try
+                    call $before-foo
+                    call $new-call
+                catch $Error
+                    call $inside-catch
+                end
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
+
+        let expected_old_instructions_wat = r#"
+            (func $old-instructions
+                try
+                    call $foo
+                    call $after-foo
+                catch $Error
+                    call $inside-catch
+                end
+                call $after-try-catch
+            )"#;
+
+        let expcted_func = parse_wat_function(expected_old_instructions_wat);
+        let mut actual_func = WatFunction::new("old-instructions");
+        actual_func.set_body(old_instructions);
+
+        assert_functions_eq(&expcted_func, &actual_func);
+    }
+
+    #[test]
+    fn test_replace_till_the_end_of_function_nested_try_catch() {
+        let mut module = create_test_module();
+
+        let input_wat = r#"
+            (func $test
+                call $outer-start
+                try
+                    call $outer-try-start
+                    try
+                        call $inner-try-start
+                        call $target-instruction
+                        call $inner-try-end
+                    catch $InnerError
+                        call $inner-catch
+                    end
+                    call $outer-try-end
+                catch $OuterError
+                    call $outer-catch
+                end
+                call $after-try-catch
+            )"#;
+
+        let input_func = parse_wat_function(input_wat);
+        module.add_function(input_func);
+
+        let mut cursor = InstructionsCursor::new(&mut module);
+        cursor.set_current_function("test").unwrap();
+        cursor.next(); // call $outer-start
+        cursor.next(); // outer try
+        let mut outer_iterator = cursor.enter_block().unwrap();
+        outer_iterator.next(&mut cursor);
+        cursor.next(); // call $outer-try-start
+        cursor.next(); // inner try
+        let mut inner_iterator = cursor.enter_block().unwrap();
+        inner_iterator.next(&mut cursor);
+        cursor.next(); // call $inner-try-start
+        cursor.next(); // call $target-instruction
+
+        assert_eq!(
+            cursor.current_instruction(),
+            Some(WatInstruction::call("$target-instruction"))
+        );
+
+        let old_instructions = cursor
+            .replace_till_the_end_of_function_try_catch_aware(vec![WatInstruction::call(
+                "$replacement-call",
+            )])
+            .unwrap();
+
+        let expected_wat = r#"
+            (func $test
+                call $outer-start
+                try
+                    call $outer-try-start
+                    try
+                        call $inner-try-start
+                        call $replacement-call
+                    catch $InnerError
+                        call $inner-catch
+                    end
+                catch $OuterError
+                    call $outer-catch
+                end
+            )"#;
+
+        let expected = parse_wat_function(expected_wat);
+        let actual = module.get_function("test").unwrap();
+
+        assert_functions_eq(&expected, actual);
+
+        let expected_old_instructions_wat = r#"
+            (func $old-instructions
+                try
+                    try
+                        call $target-instruction
+                        call $inner-try-end
+                    catch $InnerError
+                        call $inner-catch
+                    end
+                    call $outer-try-end
+                catch $OuterError
+                    call $outer-catch
+                end
+                call $after-try-catch
+            )"#;
+
+        let expected_func = parse_wat_function(expected_old_instructions_wat);
+        let mut actual_func = WatFunction::new("old-instructions");
+        actual_func.set_body(old_instructions);
+
+        assert_functions_eq(&expected_func, &actual_func);
     }
 }
