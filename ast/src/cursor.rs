@@ -2219,6 +2219,7 @@ mod tests {
                 catch $Error
                     call $inside-catch
                 end
+                call $after-try-catch
             )"#;
 
         let expected = parse_wat_function(expected_wat);
@@ -2305,9 +2306,11 @@ mod tests {
                     catch $InnerError
                         call $inner-catch
                     end
+                    call $outer-try-end
                 catch $OuterError
                     call $outer-catch
                 end
+                call $after-try-catch
             )"#;
 
         let expected = parse_wat_function(expected_wat);
