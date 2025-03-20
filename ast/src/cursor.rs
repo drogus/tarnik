@@ -267,7 +267,10 @@ impl<'a> InstructionsCursor<'a> {
             WatInstruction::I32Const(_)
             | WatInstruction::I64Const(_)
             | WatInstruction::F32Const(_)
-            | WatInstruction::F64Const(_) => (0, 1),
+            | WatInstruction::F64Const(_)
+            | WatInstruction::F64Inf
+            | WatInstruction::F64NegInf
+            | WatInstruction::F64Nan => (0, 1),
             WatInstruction::I32Add
             | WatInstruction::I64Add
             | WatInstruction::F32Add
@@ -328,6 +331,10 @@ impl<'a> InstructionsCursor<'a> {
                     (0, 0)
                 }
             }
+            WatInstruction::F32Floor => (1, 1),
+            WatInstruction::F64Floor => (1, 1),
+            WatInstruction::F32Trunc => (1, 1),
+            WatInstruction::F64Trunc => (1, 1),
             WatInstruction::F32Neg => (1, 1),
             WatInstruction::F64Neg => (1, 1),
             WatInstruction::I32Eqz => (1, 1),
@@ -1036,8 +1043,15 @@ impl InstructionsCursor<'_> {
             match instruction {
                 WatInstruction::I32Const(_) => state.push(WasmType::I32),
                 WatInstruction::I64Const(_) => state.push(WasmType::I64),
-                WatInstruction::F32Const(_) => state.push(WasmType::F32),
-                WatInstruction::F64Const(_) => state.push(WasmType::F64),
+                WatInstruction::F32Const(_)
+                | WatInstruction::F32Floor
+                | WatInstruction::F32Trunc => state.push(WasmType::F32),
+                WatInstruction::F64Const(_)
+                | WatInstruction::F64Inf
+                | WatInstruction::F64NegInf
+                | WatInstruction::F64Nan
+                | WatInstruction::F64Floor
+                | WatInstruction::F64Trunc => state.push(WasmType::F64),
 
                 WatInstruction::I32Add
                 | WatInstruction::I32Sub

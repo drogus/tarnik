@@ -1,16 +1,18 @@
 use anyhow::anyhow;
 use indexmap::IndexMap;
 use proc_macro::TokenStream;
-use std::ops::Deref;
+use regex::bytes;
+use std::{ops::Deref, str::FromStr};
 use syn::{
     bracketed,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
-    token::{self, Brace, Semi},
+    token::{self, Brace, PathSep, Semi},
     AngleBracketedGenericArguments, Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop,
     ExprUnary, GenericArgument, Lit, LitStr, Local, Meta, Pat, PatType, PathArguments, Type,
 };
+use utf16string::{LittleEndian, WString, LE};
 
 extern crate proc_macro;
 extern crate proc_macro2;
@@ -850,11 +852,10 @@ fn translate_unary(
                 None,
             )?;
 
-            // let's default to i32 for now
-            // TODO: revisit this, maybe it should only default for int literals?
+            let ty = get_type(module, function, current_block);
             let ty = match ty {
                 Some(ty) => ty,
-                None => &WasmType::I32,
+                None => WasmType::I32,
             };
 
             let mut instructions = match ty {
@@ -1294,17 +1295,57 @@ fn translate_binary(
     Ok(())
 }
 
-fn get_memory_type(path: &syn::Path) -> Result<Option<WasmType>> {
+enum MemoryAccessType {
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    U128,
+    I128,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryAccessTypeError;
+
+impl FromStr for MemoryAccessType {
+    // TODO:implement error handling
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let str = match s {
+            "i8" => Self::I8,
+            "u8" => Self::U8,
+            "i16" => Self::I16,
+            "u16" => Self::U16,
+            "i32" => Self::I32,
+            "u32" => Self::U32,
+            "i64" => Self::I64,
+            "u64" => Self::U64,
+            "i128" => Self::I128,
+            "u128" => Self::U128,
+            _ => return Err(MemoryAccessTypeError),
+        };
+
+        Ok(str)
+    }
+
+    type Err = MemoryAccessTypeError;
+}
+
+fn get_memory_type(path: &syn::Path) -> Result<Option<MemoryAccessType>> {
     let arguments = &path.segments[0].arguments;
     if let PathArguments::AngleBracketed(AngleBracketedGenericArguments { args, .. }) = arguments {
         if let GenericArgument::Type(Type::Path(path)) = &args[0] {
-            let ty: WasmType = path.path.segments[0]
-                .ident
-                .to_string()
-                .parse()
-                .map_err(|_| {
-                    syn::Error::new_spanned(path, "Couldn't convert given type to WASM")
-                })?;
+            let ty: MemoryAccessType =
+                path.path.segments[0]
+                    .ident
+                    .to_string()
+                    .parse()
+                    .map_err(|_| {
+                        syn::Error::new_spanned(path, "Couldn't convert given type to WASM")
+                    })?;
             return Ok(Some(ty));
         }
     }
@@ -1357,6 +1398,16 @@ fn get_type(
         WatInstruction::I64Const(_) => Some(WasmType::I64),
         WatInstruction::F32Const(_) => Some(WasmType::F32),
         WatInstruction::F64Const(_) => Some(WasmType::F64),
+
+        WatInstruction::F64Floor => Some(WasmType::F64),
+        WatInstruction::F32Floor => Some(WasmType::F32),
+
+        WatInstruction::F64Trunc => Some(WasmType::F64),
+        WatInstruction::F32Trunc => Some(WasmType::F32),
+
+        WatInstruction::F64Inf => Some(WasmType::F64),
+        WatInstruction::F64Nan => Some(WasmType::F64),
+        WatInstruction::F64NegInf => Some(WasmType::F64),
 
         WatInstruction::I32Eqz => Some(WasmType::I32),
         WatInstruction::I64Eqz => Some(WasmType::I64),
@@ -2046,18 +2097,22 @@ fn translate_expression(
                                     None,
                                 )?;
 
-                                let ty = memory_type.unwrap_or(WasmType::I32);
+                                let ty = memory_type.unwrap_or(MemoryAccessType::I32);
                                 match ty {
-                                    WasmType::I32 => {
+                                    MemoryAccessType::I32 => {
                                         current_block
                                             .push(WatInstruction::I32Store(Some(target_name)));
                                     }
-                                    WasmType::I8 => {
+                                    MemoryAccessType::I8 => {
                                         current_block
                                             .push(WatInstruction::I32Store8(Some(target_name)));
                                     }
+                                    MemoryAccessType::U16 => {
+                                        current_block
+                                            .push(WatInstruction::I32Store16(Some(target_name)));
+                                    }
                                     t => {
-                                        todo!("memory access with type {t} not implemented");
+                                        todo!("memory access not implemented");
                                     }
                                 }
                             }
@@ -2215,7 +2270,7 @@ fn translate_expression(
                 translate_statement(module, function, current_block, stmt)?;
             }
         }
-        Expr::Break(_) => current_block.push(WatInstruction::Br("1".to_string())),
+        Expr::Break(_) => current_block.push(WatInstruction::Br("2".to_string())),
         Expr::Call(expr_call) => {
             if let Expr::Path(syn::ExprPath { path, .. }) = expr_call.func.deref() {
                 let func_name = path.segments[0].ident.to_string();
@@ -2243,7 +2298,11 @@ fn translate_expression(
                     if let Expr::Lit(expr_lit) = &expr_call.args[1] {
                         if let syn::Lit::Str(lit_str) = &expr_lit.lit {
                             let message = lit_str.value();
-                            let (offset, len) = module.add_data(message);
+                            // TODO: I changed Strings handling to UTF16 in order to make it work with
+                            // JAWSM as strings in JavaScript are UTF-16 encoded, but in the future I want
+                            // to make it configurable
+                            let utf16_string: WString<LittleEndian> = WString::from(&message);
+                            let (offset, len) = module.add_data(utf16_string.into_bytes());
 
                             // Generate assertion code
                             current_block.append(&mut condition_instructions);
@@ -2659,13 +2718,16 @@ fn translate_expression(
                     LabelType::Memory => {
                         let memory_type = get_memory_type(path)?;
                         match memory_type {
-                            Some(WasmType::I32) => {
+                            Some(MemoryAccessType::I32) => {
                                 current_block.push(WatInstruction::I32Load(target_name.into()));
                             }
-                            Some(WasmType::I8) => {
+                            Some(MemoryAccessType::I8) => {
                                 current_block.push(WatInstruction::I32Load8S(target_name.into()));
                             }
-                            Some(ty) => todo!("memory access other type {ty}"),
+                            Some(MemoryAccessType::U16) => {
+                                current_block.push(WatInstruction::I32Load16U(target_name.into()));
+                            }
+                            Some(ty) => todo!("memory access other type"),
                             None => {
                                 // default to i32
                                 current_block.push(WatInstruction::I32Load(target_name.into()));
@@ -2716,6 +2778,22 @@ fn translate_expression(
                     "Couldn't get the type for null",
                 ))?;
                 current_block.push(WatInstruction::ref_null(ty.clone()));
+            } else if name == "f64" && path_expr.path.segments.get(1).is_some() {
+                if let Some(segment) = path_expr.path.segments.get(1) {
+                    let s = segment.ident.to_string();
+                    if s == "INFINITY" {
+                        current_block.push(WatInstruction::F64Inf);
+                    } else if s == "NAN" {
+                        current_block.push(WatInstruction::F64Nan);
+                    } else if s == "NEG_INFINITY" {
+                        current_block.push(WatInstruction::F64NegInf);
+                    } else {
+                        return Err(syn::Error::new_spanned(
+                            path_expr,
+                            format!("f64::{s} not recognized"),
+                        ));
+                    }
+                }
             } else {
                 current_block.push(get_var_instruction(module, function, &name).ok_or(
                     syn::Error::new_spanned(
@@ -2974,6 +3052,16 @@ impl ToTokens for OurWatInstruction {
 
             Call(name) => quote! { #w::Call(#name.to_string()) },
             CallRef(name) => quote! { #w::CallRef(#name.to_string()) },
+
+            F64Floor => quote! { #w::F64Floor },
+            F32Floor => quote! { #w::F32Floor },
+
+            F64Trunc => quote! { #w::F64Trunc },
+            F32Trunc => quote! { #w::F32Trunc },
+
+            F64Inf => quote! { #w::F64Inf },
+            F64NegInf => quote! { #w::F64NegInf },
+            F64Nan => quote! { #w::F64Nan },
 
             I32Const(value) => quote! { #w::I32Const(#value) },
             I64Const(value) => quote! { #w::I64Const(#value) },
@@ -3418,7 +3506,12 @@ fn translate_macro(
             ::syn::parse::Parser::parse2(
                 |input: ParseStream<'_>| {
                     let data_string: LitStr = input.parse()?;
-                    let (offset, _) = module.add_data(data_string.value());
+                    // TODO: I changed Strings handling to UTF16 in order to make it work with
+                    // JAWSM as strings in JavaScript are UTF-16 encoded, but in the future I want
+                    // to make it configurable
+                    let utf16_string: WString<LittleEndian> = WString::from(&data_string.value());
+                    let bytes = utf16_string.into_bytes();
+                    let (offset, _) = module.add_data(bytes);
                     instructions.push(WatInstruction::I32Const(offset as i32));
 
                     Ok(())
@@ -3484,6 +3577,53 @@ fn translate_macro(
                 return Err(syn::Error::new(
                     macro_span,
                     "The len!() macro expects an identifier, for example len!(x);",
+                ));
+            }
+        }
+        "trunc" => {
+            let expr: Expr = ::syn::parse::Parser::parse2(Expr::parse, tokens)?;
+            if let Expr::Path(expr_path) = expr {
+                let name = format!("${}", expr_path.path.segments[0].ident);
+                let label_type = get_label_type(module, function, &name);
+                match label_type {
+                    Some(label_type) => match label_type {
+                        LabelType::Global => {
+                            instructions.push(WatInstruction::GlobalGet(name.clone()))
+                        }
+                        LabelType::Local => {
+                            instructions.push(WatInstruction::LocalGet(name.clone()))
+                        }
+                        LabelType::Memory => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a memory",
+                            ))
+                        }
+                        LabelType::Func => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a function reference",
+                            ))
+                        }
+                    },
+                    None => return Err(syn::Error::new(macro_span, "{name} variable not found")),
+                }
+
+                let ty = get_type_for_a_label(module, function, &name);
+                match ty {
+                    Some(WasmType::F64) => instructions.push(WatInstruction::F64Trunc),
+                    Some(WasmType::F32) => instructions.push(WatInstruction::F32Trunc),
+                    _ => {
+                        return Err(syn::Error::new(
+                            macro_span,
+                            "The trunc operation is only available for f32 and f64",
+                        ))
+                    }
+                }
+            } else {
+                return Err(syn::Error::new(
+                    macro_span,
+                    "The trunc!() macro expects an identifier, for example trunc!(x);",
                 ));
             }
         }
@@ -3706,8 +3846,9 @@ pub fn wasm(input: TokenStream) -> TokenStream {
         .clone()
         .into_iter()
         .map(|(offset, data)| {
+            let quoted = data.iter().map(|b| quote! { #b });
             quote! {
-                module._add_data_raw(#offset, #data.to_string());
+                module._add_data_raw(#offset, vec![#(#quoted),*]);
             }
         });
 

@@ -289,6 +289,16 @@ pub enum WatInstruction {
     F32Const(f32),
     F64Const(f64),
 
+    F64Inf,
+    F64NegInf,
+    F64Nan,
+
+    F32Floor,
+    F64Floor,
+
+    F32Trunc,
+    F64Trunc,
+
     F32Neg,
     F64Neg,
 
@@ -724,7 +734,7 @@ impl fmt::Display for VecDebug {
                 .iter()
                 .map(|instr| instr.to_string())
                 .collect::<Vec<String>>()
-                .join("\n")
+                .join("")
         )
     }
 }
@@ -732,6 +742,16 @@ impl fmt::Display for VecDebug {
 impl fmt::Display for WatInstruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            WatInstruction::F64Floor => writeln!(f, "f64.floor"),
+            WatInstruction::F32Floor => writeln!(f, "f32.floor"),
+
+            WatInstruction::F64Trunc => writeln!(f, "f64.trunc"),
+            WatInstruction::F32Trunc => writeln!(f, "f32.trunc"),
+
+            WatInstruction::F64Inf => writeln!(f, "f64.const inf"),
+            WatInstruction::F64NegInf => writeln!(f, "f64.const -inf"),
+            WatInstruction::F64Nan => writeln!(f, "f64.const nan"),
+
             WatInstruction::F32Neg => writeln!(f, "f32.neg"),
             WatInstruction::F64Neg => writeln!(f, "f64.neg"),
 
@@ -1143,6 +1163,7 @@ pub mod wat_converter;
 
 #[cfg(test)]
 use test_helpers::*;
+use utf16string::WString;
 
 impl fmt::Display for WatFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1212,9 +1233,9 @@ pub struct WatModule {
     // TODO: changet it to a struct
     pub exports: Vec<(String, String, String)>,
     pub globals: HashMap<String, Global>,
-    pub data: Vec<(usize, String)>,
+    pub data: Vec<(usize, Vec<u8>)>,
     pub data_offset: usize,
-    pub data_offsets: HashMap<String, usize>,
+    pub data_offsets: HashMap<Vec<u8>, usize>,
     pub memories: HashMap<String, (i32, Option<i32>)>,
 }
 
@@ -1307,7 +1328,7 @@ impl WatModule {
         self.types.push(TypeDefinition::Type(name.into(), ty));
     }
 
-    pub fn add_data(&mut self, content: String) -> (usize, usize) {
+    pub fn add_data(&mut self, content: Vec<u8>) -> (usize, usize) {
         let len = content.len();
         let offset = self.data_offset;
         if let Some(offset) = self.data_offsets.get(&content) {
@@ -1317,7 +1338,7 @@ impl WatModule {
         }
     }
 
-    pub fn _add_data_raw(&mut self, offset: usize, content: String) -> (usize, usize) {
+    pub fn _add_data_raw(&mut self, offset: usize, content: Vec<u8>) -> (usize, usize) {
         let len = content.len();
         self.data.push((offset, content.clone()));
         self.data_offsets.insert(content.clone(), offset);
@@ -1442,18 +1463,15 @@ impl fmt::Display for WatModule {
 
         // Data
         for (offset, data) in &self.data {
+            // if let Ok(str) = WString::from_utf16le(data.clone()) {
+            //     writeln!(f, "  ;; {}", str.to_string())?;
+            // } else if let Ok(str) = std::str::from_utf8(data) {
+            //     writeln!(f, "  ;; {str}")?;
+            // }
+            //
             write!(f, "  (data (i32.const {}) \"", offset)?;
-            // TODO: this escaping should be done when inserting the data
-            for &byte in data.as_bytes() {
-                match byte {
-                    b'"' => write!(f, "\\\"")?,
-                    b'\\' => write!(f, "\\")?,
-                    b'\n' => write!(f, "\\n")?,
-                    b'\r' => write!(f, "\\r")?,
-                    b'\t' => write!(f, "\\t")?,
-                    _ if byte.is_ascii_graphic() || byte == b' ' => write!(f, "{}", byte as char)?,
-                    _ => write!(f, "\\{:02x}", byte)?,
-                }
+            for byte in data {
+                write!(f, "\\{:02x}", byte)?;
             }
             writeln!(f, "\")")?;
         }
@@ -1499,7 +1517,7 @@ impl fmt::Display for WatModule {
 
 fn memory_op(f: &mut Formatter<'_>, instr: &str, label: &Option<String>) -> fmt::Result {
     if let Some(label) = label {
-        write!(f, "{instr} {label}")
+        writeln!(f, "{instr} {label}")
     } else {
         writeln!(f, "{instr}")
     }

@@ -12,6 +12,7 @@ anyhow = "1"
 slotmap = "1"
 similar.workspace = true 
 wast.workspace = true
+utf16string = "0.2.0"
 
 [dev-dependencies]
 similar.workspace = true
