@@ -451,6 +451,7 @@ impl<'a> InstructionsCursor<'a> {
             WatInstruction::StructGet(_, _) => (1, 1),
             WatInstruction::StructSet(_, _) => (2, 0),
             WatInstruction::ArrayNew(_) => (2, 1),
+            WatInstruction::ArrayCopy(_, _) => (5, 0),
             WatInstruction::ArrayNewFixed(_, count) => (*count as usize, 1),
             WatInstruction::ArrayLen => (1, 1),
             WatInstruction::ArrayGet(_) => (2, 1),
@@ -1462,6 +1463,11 @@ impl InstructionsCursor<'_> {
                     state.pop();
                     state.pop();
                     state.push(WasmType::I32);
+                }
+                WatInstruction::ArrayCopy(_, _) => {
+                    for _ in 0..5 {
+                        state.pop();
+                    }
                 }
             }
         }

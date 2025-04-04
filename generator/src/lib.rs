@@ -8,7 +8,7 @@ use syn::{
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned,
-    token::{self, Brace, PathSep, Semi},
+    token::{self, Brace, Comma, PathSep, Semi},
     AngleBracketedGenericArguments, Attribute, Expr, ExprBinary, ExprClosure, ExprForLoop,
     ExprUnary, GenericArgument, Lit, LitStr, Local, Meta, Pat, PatType, PathArguments, Type,
 };
@@ -1466,6 +1466,7 @@ fn get_type(
         WatInstruction::ArrayNewFixed(_, _) => {
             todo!("get_type: WatInstruction::NewFixed")
         }
+        WatInstruction::ArrayCopy(_, _) => None,
         WatInstruction::I32Eq => Some(WasmType::I32),
         WatInstruction::I64Eq => Some(WasmType::I32),
         WatInstruction::F32Eq => Some(WasmType::I32),
@@ -2322,6 +2323,34 @@ fn translate_expression(
                     } else {
                         panic!("Second argument of assert must be a string literal");
                     }
+                } else if func_name == "array_copy" {
+                    if expr_call.args.len() != 7 {
+                        return Err(syn::Error::new_spanned(
+                            expr_call.args.clone(),
+                            "Expected 7 arguments".to_string(),
+                        ));
+                    }
+                    let typeidx1 = format!("${}", get_expr_path(&expr_call.args[0])?);
+                    let typeidx2 = format!("${}", get_expr_path(&expr_call.args[1])?);
+
+                    let types = vec![
+                        WasmType::r#ref(typeidx1.clone()),
+                        WasmType::I32,
+                        WasmType::r#ref(typeidx2.clone()),
+                        WasmType::I32,
+                        WasmType::I32,
+                    ];
+                    for (i, arg) in expr_call.args.iter().skip(2).enumerate() {
+                        translate_expression(
+                            module,
+                            function,
+                            current_block,
+                            arg,
+                            None,
+                            types.get(i),
+                        )?;
+                    }
+                    current_block.push(WatInstruction::ArrayCopy(typeidx1, typeidx2));
                 } else if let Some(label) = get_label_type(module, function, &func_name) {
                     match label {
                         LabelType::Global => {
@@ -2886,6 +2915,13 @@ fn translate_expression(
     Ok(())
 }
 
+fn get_expr_path(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::Path(path) => Ok(path.path.segments[0].ident.to_string()),
+        _ => return Err(syn::Error::new(expr.span(), "Expected identifier")),
+    }
+}
+
 #[derive(Debug)]
 struct OurWatFunction(WatFunction);
 #[derive(Debug)]
@@ -3081,6 +3117,9 @@ impl ToTokens for OurWatInstruction {
                 quote! { #w::StructSet(#type_name.to_string(), #field_name.to_string() ) }
             }
             ArrayNew(typeidx) => quote! { #w::ArrayNew(#typeidx.to_string()) },
+            ArrayCopy(typeidx1, typeidx2) => {
+                quote! { #w::ArrayCopy(#typeidx1.to_string(), #typeidx2.to_string()) }
+            }
             RefNull(ty) => {
                 let ty = OurWasmType(ty.clone());
                 quote! { #w::RefNull(#ty) }
@@ -3577,6 +3616,53 @@ fn translate_macro(
                 return Err(syn::Error::new(
                     macro_span,
                     "The len!() macro expects an identifier, for example len!(x);",
+                ));
+            }
+        }
+        "floor" => {
+            let expr: Expr = ::syn::parse::Parser::parse2(Expr::parse, tokens)?;
+            if let Expr::Path(expr_path) = expr {
+                let name = format!("${}", expr_path.path.segments[0].ident);
+                let label_type = get_label_type(module, function, &name);
+                match label_type {
+                    Some(label_type) => match label_type {
+                        LabelType::Global => {
+                            instructions.push(WatInstruction::GlobalGet(name.clone()))
+                        }
+                        LabelType::Local => {
+                            instructions.push(WatInstruction::LocalGet(name.clone()))
+                        }
+                        LabelType::Memory => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a memory",
+                            ))
+                        }
+                        LabelType::Func => {
+                            return Err(syn::Error::new(
+                                macro_span,
+                                "Can't get a length of a function reference",
+                            ))
+                        }
+                    },
+                    None => return Err(syn::Error::new(macro_span, "{name} variable not found")),
+                }
+
+                let ty = get_type_for_a_label(module, function, &name);
+                match ty {
+                    Some(WasmType::F64) => instructions.push(WatInstruction::F64Floor),
+                    Some(WasmType::F32) => instructions.push(WatInstruction::F32Floor),
+                    _ => {
+                        return Err(syn::Error::new(
+                            macro_span,
+                            "The trunc operation is only available for f32 and f64",
+                        ))
+                    }
+                }
+            } else {
+                return Err(syn::Error::new(
+                    macro_span,
+                    "The floor!() macro expects an identifier, for example floor!(x);",
                 ));
             }
         }

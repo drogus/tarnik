@@ -456,6 +456,7 @@ pub enum WatInstruction {
     ArrayGet(String),
     ArrayGetU(String),
     ArraySet(String),
+    ArrayCopy(String, String),
     RefNull(WasmType),
     RefCast(WasmType),
     RefTest(WasmType),
@@ -876,6 +877,9 @@ impl fmt::Display for WatInstruction {
             WatInstruction::ArraySet(ty) => writeln!(f, "array.set {ty}"),
             WatInstruction::ArrayNewFixed(typeidx, n) => {
                 writeln!(f, "array.new_fixed {typeidx} {n}")
+            }
+            WatInstruction::ArrayCopy(fromidx, toidx) => {
+                writeln!(f, "array.copy {fromidx} {toidx}")
             }
             WatInstruction::RefNull(ty) => {
                 let ty_str = match ty {
